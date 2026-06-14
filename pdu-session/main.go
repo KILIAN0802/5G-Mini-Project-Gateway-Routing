@@ -29,12 +29,18 @@ type CreateSessionResponse struct {
 	Supi         string `json:"supi"`
 }
 
+type MetricsResponse struct {
+	InstanceID   string `json:"instanceID"`
+	ActiveRequests int    `json:"activeRequests"`
+}
+
 // Hàm xử lý
 
 func CreateSession(
 	w http.ResponseWriter, //
 	r *http.Request,
 ) {
+	activeRequests++
 	var req CreateSessionRequest
 
 	err := json.NewDecoder(
@@ -62,10 +68,12 @@ func CreateSession(
 		"application/json",
 	) // Thiết lập HTTP header cho response
 	// w.WriteHeader(http.StatusOK)// 200 OK
-
+	activeRequests--
 	json.NewEncoder(w).Encode(resp)
 
 }
+
+
 
 func HealthCheck(
 	w http.ResponseWriter,
@@ -76,7 +84,25 @@ func HealthCheck(
 	)
 }
 
+func Metrics(
+	w http.ResponseWriter,
+	r *http.Request,
+){
+	resp := MetricsResponse{
+		InstanceID: instanceID,
+		ActiveRequests: activeRequests,
+	}
+
+	w.Header().Set(
+		"Content-Type",
+		"application/json",
+	)
+	json.NewEncoder(w).Encode(resp)
+}
+
 var instanceID string
+
+var activeRequests int
 
 
 func main() {
@@ -96,8 +122,14 @@ func main() {
 		HealthCheck,
 	)
 
+
 	log.Println("PDU Session started: " + port)
 
+	http.HandleFunc(
+		"/metrics",
+		Metrics,
+	)
+	
 	http.ListenAndServe(
 		":"+port, // Cổng
 		nil,
