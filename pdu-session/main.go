@@ -5,6 +5,8 @@ import (
 	// "fmt"
 	"log"
 	"net/http"
+	"time"
+	"sync"
 )
 
 type SNssai struct {
@@ -35,12 +37,16 @@ type MetricsResponse struct {
 }
 
 // Hàm xử lý
+var mu sync.Mutex
 
 func CreateSession(
 	w http.ResponseWriter, //
 	r *http.Request,
 ) {
-	activeRequests++
+	IncrementActiveRequest()
+	defer DecrementActiveRequest()
+	
+	time.Sleep(10 * time.Second)
 	var req CreateSessionRequest
 
 	err := json.NewDecoder(
@@ -68,7 +74,6 @@ func CreateSession(
 		"application/json",
 	) // Thiết lập HTTP header cho response
 	// w.WriteHeader(http.StatusOK)// 200 OK
-	activeRequests--
 	json.NewEncoder(w).Encode(resp)
 
 }
@@ -90,7 +95,7 @@ func Metrics(
 ){
 	resp := MetricsResponse{
 		InstanceID: instanceID,
-		ActiveRequests: activeRequests,
+		ActiveRequests: GetActiveRequests(),
 	}
 
 	w.Header().Set(
@@ -121,7 +126,6 @@ func main() {
 		"/health",
 		HealthCheck,
 	)
-
 
 	log.Println("PDU Session started: " + port)
 

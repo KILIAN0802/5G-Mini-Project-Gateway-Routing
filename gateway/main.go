@@ -11,6 +11,7 @@ import (
 	// Gửi request HTTP (http.Get, http.Post)
 	// Xử lý request/response qua http.Handler
 	"gateway/algorithm"
+	"gateway/handler"
 	"gateway/health"
 	"gateway/models"
 	"gateway/registry"
@@ -79,6 +80,11 @@ func main() {
 		ForwardToPDU,
 	)
 
+	http.HandleFunc(
+		"/instances",
+		handler.GetInstances,
+	)
+
 	log.Println(
 		"Gateway started: 8080",
 	)
@@ -87,6 +93,15 @@ func main() {
 		for {
 			health.CheckAllInstances()
 			time.Sleep(5 * time.Second)
+		}
+	}()
+
+	go func() {
+		for {
+			health.UpdateAllMetrics(
+				registry.Instances,
+			)
+			time.Sleep(1 * time.Second)
 		}
 	}()
 

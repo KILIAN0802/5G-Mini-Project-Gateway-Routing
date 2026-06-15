@@ -6,4 +6,5 @@ type Instance struct {
 	Healthy       bool
 	Weight        int
 	CurrentWeight int
+	ActiveRequest int 
 }
