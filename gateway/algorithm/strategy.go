@@ -5,5 +5,5 @@ import (
 )
 
 type Strategy interface {
-	Select(instances []*models.Instance) models.Instance
+	Select(instances []*models.Instance) *models.Instance
 }

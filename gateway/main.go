@@ -13,7 +13,6 @@ import (
 	"gateway/algorithm"
 	"gateway/handler"
 	"gateway/health"
-	"gateway/models"
 	"gateway/registry"
 	"time"
 )
@@ -34,7 +33,7 @@ func ForwardToPDU(
 		return
 	}
 	selected := algorithm.SelectBackend(registry.GetHealthyInstance())
-	if selected == (models.Instance{}) {
+	if selected == nil {
 		http.Error(
 			w,
 			"NO_BACKEND_AVAILABLE",
@@ -42,6 +41,16 @@ func ForwardToPDU(
 		)
 		return
 	}
+
+	isLB := algorithm.IsLoadBalancer()
+	if isLB {
+		selected.ActiveRequest++
+	}
+	defer func() {
+		if isLB {
+			selected.ActiveRequest--
+		}
+	}()
 
 	log.Printf(
 		"Gateway route to %s",
@@ -72,8 +81,9 @@ func ForwardToPDU(
 }
 
 func main() {
-	algorithm.SetStrategy(&algorithm.RoundRobin{})
+	// algorithm.SetStrategy(&algorithm.RoundRobin{})
 	// algorithm.SetStrategy(&algorithm.WeightedRR{})
+	algorithm.SetStrategy(&algorithm.LoadBalancer{})
 
 	http.HandleFunc(
 		"/nsmf-pdusession/v1/sm-contexts",
@@ -92,16 +102,18 @@ func main() {
 	go func() {
 		for {
 			health.CheckAllInstances()
-			time.Sleep(5 * time.Second)
+			time.Sleep(10 * time.Second)
 		}
 	}()
 
 	go func() {
 		for {
-			health.UpdateAllMetrics(
-				registry.Instances,
-			)
-			time.Sleep(1 * time.Second)
+			if algorithm.IsLoadBalancer() {
+				health.UpdateAllMetrics(
+					registry.Instances,
+				)
+			}
+			time.Sleep(10 * time.Second)
 		}
 	}()
 

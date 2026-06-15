@@ -6,12 +6,12 @@ var counter int
 
 type RoundRobin struct{}
 
-func (r RoundRobin) Select(healthy []*models.Instance) models.Instance {
+func (r RoundRobin) Select(healthy []*models.Instance) *models.Instance {
 	if len(healthy) == 0 {
-		return models.Instance{}
+		return nil
 	}
 	index := counter % len(healthy)
 
 	counter++
-	return *healthy[index]
+	return healthy[index]
 }

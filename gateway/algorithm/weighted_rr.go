@@ -9,9 +9,12 @@ type WeightedRR struct {
 	mutex sync.Mutex
 }
 
-func (w *WeightedRR) Select(instances []*models.Instance) models.Instance {
+func (w *WeightedRR) Select(instances []*models.Instance) *models.Instance {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
+	if len(instances) == 0 {
+		return nil
+	}
 	totalWeight := 0
 	for _, ins := range instances {
 		totalWeight += ins.Weight
@@ -32,5 +35,5 @@ func (w *WeightedRR) Select(instances []*models.Instance) models.Instance {
 
 	instances[indexMax].CurrentWeight -= totalWeight
 
-	return *instances[indexMax]
+	return instances[indexMax]
 }
