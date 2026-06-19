@@ -26,3 +26,11 @@ func IsLoadBalancer() bool {
 	}
 	return ok
 }
+
+func IsWeightedRR() bool {
+	if CurrentStrategy == nil {
+		return false
+	}
+	_, ok := CurrentStrategy.(*WeightedRR)
+	return ok
+}
