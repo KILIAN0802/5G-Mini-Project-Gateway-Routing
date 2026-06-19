@@ -1,1 +1,23 @@
-go
+version: "3.8"
+
+services:
+  #Container của gateway
+  gateway:
+    build:
+      context: ./gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      - pdu-session
+
+    
+  pdu-session:
+    build:
+      context: ./pdu-session
+    environment:
+      - INSTANCE_ID=
+      - PORT=9001 # Mỗi container sẽ có 1 IP riêng -> có port riêng
+    deploy:
+      replicas: 4
+
+  
