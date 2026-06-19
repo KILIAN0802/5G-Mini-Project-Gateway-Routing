@@ -43,10 +43,13 @@ func CheckInstance(
 	)
 }
 
+
 func CheckAllInstances() {
-	for i := range registry.Instances {
+	registry.RegistryMu.RLock()
+	defer registry.RegistryMu.RUnlock()
+	for i := range registry.Instance {
 		CheckInstance(
-			&registry.Instances[i],
+			registry.Instance[i],
 		)
 	}
 }
