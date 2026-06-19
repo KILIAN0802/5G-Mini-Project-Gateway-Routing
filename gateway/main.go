@@ -5,6 +5,7 @@ import (
 	"io"    // Cung cấp các interface chuẩn để đọc/ghi dữ liệu
 	"log"
 	"net/http"
+	"sync/atomic"
 
 	// Cho phép:
 	// Tạo web server ( http.ListenAndServe)
@@ -44,11 +45,11 @@ func ForwardToPDU(
 
 	isLB := algorithm.IsLoadBalancer()
 	if isLB {
-		selected.ActiveRequest++
+		atomic.AddInt32(&selected.ActiveRequest, 1)
 	}
 	defer func() {
 		if isLB {
-			selected.ActiveRequest--
+			atomic.AddInt32(&selected.ActiveRequest, -1)
 		}
 	}()
 
@@ -82,8 +83,8 @@ func ForwardToPDU(
 
 func main() {
 	// algorithm.SetStrategy(&algorithm.RoundRobin{})
-	// algorithm.SetStrategy(&algorithm.WeightedRR{})
-	algorithm.SetStrategy(&algorithm.LoadBalancer{})
+	algorithm.SetStrategy(&algorithm.WeightedRR{})
+	//algorithm.SetStrategy(&algorithm.LoadBalancer{})
 
 	http.HandleFunc(
 		"/nsmf-pdusession/v1/sm-contexts",
@@ -95,6 +96,11 @@ func main() {
 		handler.GetInstances,
 	)
 
+	http.HandleFunc(
+		"/set-weight",
+		handler.SetWeight,
+	)
+
 	log.Println(
 		"Gateway started: 8080",
 	)
@@ -102,21 +108,20 @@ func main() {
 	go func() {
 		for {
 			health.CheckAllInstances()
-			time.Sleep(10 * time.Second)
+			time.Sleep(registry.DefaultInterval)
 		}
 	}()
 
 	go func() {
 		for {
 			if algorithm.IsLoadBalancer() {
-				health.UpdateAllMetrics(
-					registry.Instances,
-				)
+				health.UpdateAllMetrics()
 			}
-			time.Sleep(10 * time.Second)
+			time.Sleep(registry.DefaultInterval)
 		}
 	}()
 
+	go registry.ServiceDiscovery()
 	http.ListenAndServe(
 		":8080",
 		nil,

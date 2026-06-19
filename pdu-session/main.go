@@ -2,11 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	// "fmt"
 	"log"
 	"net/http"
-	"time"
 	"sync"
+	"time"
 )
 
 type SNssai struct {
@@ -46,7 +47,7 @@ func CreateSession(
 	IncrementActiveRequest()
 	defer DecrementActiveRequest()
 	
-	time.Sleep(10 * time.Second)
+	time.Sleep(50 * time.Millisecond)
 	var req CreateSessionRequest
 
 	err := json.NewDecoder(
@@ -57,7 +58,7 @@ func CreateSession(
 		http.Error(
 			w,
 			"bad request",         // Response message -> Ghi vào r.Body
-			http.StatusBadRequest, // 400 = Bad Request
+			400, // 400 = Bad Request
 		)
 		return // Trả về r.Body và dừng hàm
 	}
@@ -73,7 +74,7 @@ func CreateSession(
 		"Content-Type",
 		"application/json",
 	) // Thiết lập HTTP header cho response
-	// w.WriteHeader(http.StatusOK)// 200 OK
+	// w.WriteHeader(200)// 200 OK
 	json.NewEncoder(w).Encode(resp)
 
 }
@@ -111,7 +112,14 @@ var activeRequests int
 
 
 func main() {
-	instanceID = GetEnv("INSTANCE_ID", "pdu-unknown")
+	instanceID = GetEnv("INSTANCE_ID", "")
+	if instanceID == "" {
+		if host, err := os.Hostname(); err == nil {
+			instanceID = host
+		}else{
+			instanceID = "pdu-unknown"
+		}
+	}
 
 	port := GetEnv(
 		"PORT",
