@@ -1,6 +1,9 @@
 package algorithm
 
-import "gateway/models"
+import (
+	"gateway/models"
+	"sync/atomic"
+)
 
 type LoadBalancer struct{}
 
@@ -14,7 +17,7 @@ func (l LoadBalancer) Select(
 	selected := instances[0]
 
 	for _, ins := range instances {
-		if ins.ActiveRequest < selected.ActiveRequest {
+		if atomic.LoadInt32(&ins.ActiveRequest) < atomic.LoadInt32(&selected.ActiveRequest) {
 			selected = ins
 		}
 	}
