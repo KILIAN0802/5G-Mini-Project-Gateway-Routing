@@ -2,9 +2,13 @@ package health
 
 import (
 	"encoding/json"
+	"gateway/models"
+	"gateway/registry"
 	"log"
 	"net/http"
-	"gateway/models"
+	// net: định nghĩa các kiểu dữ liệu về internet như địa chỉ ip, ...
+	// net/http: định nghĩa các phương thức http như GET, POST, PUT, DELETE
+	"sync/atomic"
 )
 
 func UpdateMetrics(
@@ -16,7 +20,7 @@ func UpdateMetrics(
 	log.Printf(
 		"%s active=%d",
 		instance.ID,
-		instance.ActiveRequest,
+		atomic.LoadInt32(&instance.ActiveRequest),
 	)
 
 	if err !=nil{
@@ -35,11 +39,13 @@ func UpdateMetrics(
 		return
 	}
 
-	instance.ActiveRequest = metrics.ActiveRequests
+	atomic.StoreInt32(&instance.ActiveRequest, int32(metrics.ActiveRequests))
 }
 
-func UpdateAllMetrics(instances []models.Instance){
-	for i := range instances{
-		UpdateMetrics(&instances[i])
+func UpdateAllMetrics(){
+	registry.RegistryMu.RLock() // Chỉ cho phép đọc không cho ghi
+	defer registry.RegistryMu.RUnlock()// Bảo vệ registry.Instance
+	for i := range registry.Instance{
+		UpdateMetrics(registry.Instance[i])
 	}
 }
