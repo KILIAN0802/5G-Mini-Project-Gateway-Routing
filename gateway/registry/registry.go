@@ -2,43 +2,92 @@ package registry
 
 import (
 	"gateway/models"
+	"log"
+	"sync"
+	"time"
+	"net"
 )
 
 func GetHealthyInstance() []*models.Instance {
-	var healthy []*models.Instance
 
-	for i := range Instances {
-		if Instances[i].Healthy {
+	RegistryMu.RLock()
+	defer RegistryMu.RUnlock()
+
+	var healthy []*models.Instance // slice sẽ chứa những pdu instance đang hoạt động
+	for i := range Instance {
+		if Instance[i].Healthy {
 			healthy =
 				append(
 					healthy,
-					&Instances[i],
-				)
+					Instance[i],
+				)// thêm Instance[i] vào health
 		}
 	}
 
 	return healthy
 }
 
-var Instances = []models.Instance{
-	{
-		ID:      "pdu-1",
-		Address: "localhost:9001",
-		Weight:  3,
-	},
-	{
-		ID:      "pdu-2",
-		Address: "localhost:9002",
-		Weight:  1,
-	},
-	{
-		ID:      "pdu-3",
-		Address: "localhost:9003",
-		Weight:  6,
-	},
-	{
-		ID:      "pdu-4",
-		Address: "localhost:9004",
-		Weight:  4,
-	},
+const DefaultInterval = 10 * time.Second
+
+var (
+	Instance []*models.Instance
+	RegistryMu sync.RWMutex
+)
+
+func ServiceDiscovery() {
+	for {
+		ips, err := net.LookupIP("pdu-session")
+		if err != nil{
+			log.Println("Lookup error : ", err)
+			time.Sleep(DefaultInterval)
+			continue
+		}
+
+		newInstances := make(map[string] bool)
+		for _, ip := range ips {
+			addr := ip.String() + ":9001"
+			newInstances[addr] = true
+		}
+
+		RegistryMu.Lock()
+		// Thêm IP mới
+
+		for addr := range newInstances {
+			found := false
+			for _, inst := range Instance {
+				if inst.Address == addr {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				Instance = append(Instance, &models.Instance{
+					ID: "Instance:"+ addr,
+					Address: addr,
+					Healthy: false,
+					Weight: 1,
+				})
+				log.Println("New instance added: ", addr)
+			}	
+			}
+
+			var updated []*models.Instance
+			for _, inst := range Instance{
+				if newInstances[inst.Address] {
+				updated = append(updated, inst)
+			}else{
+				log.Println("Instance removed: ", inst.Address)
+			}
+		}
+
+		Instance = updated
+		RegistryMu.Unlock()
+		time.Sleep(DefaultInterval)
+	}
 }
+	
+
+
+
+
