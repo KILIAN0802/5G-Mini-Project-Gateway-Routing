@@ -3,6 +3,7 @@ package algorithm
 import (
 	"gateway/models"
 	"sync"
+	"sync/atomic"
 )
 
 type WeightedRR struct {
@@ -15,16 +16,16 @@ func (w *WeightedRR) Select(instances []*models.Instance) *models.Instance {
 	if len(instances) == 0 {
 		return nil
 	}
-	totalWeight := 0
+	totalWeight := int32(0)
 	for _, ins := range instances {
-		totalWeight += ins.Weight
+		totalWeight += atomic.LoadInt32(&ins.Weight)
 	}
 
 	for i := range instances {
-		instances[i].CurrentWeight += instances[i].Weight
+		instances[i].CurrentWeight += atomic.LoadInt32(&instances[i].Weight)
 	}
 
-	maxCurrentWeight := 0
+	maxCurrentWeight := int32(0)
 	indexMax := 0
 	for i := range instances {
 		if instances[i].CurrentWeight > maxCurrentWeight {
