@@ -8,13 +8,24 @@ import (
 	"net/http"
 	// net: định nghĩa các kiểu dữ liệu về internet như địa chỉ ip, ...
 	// net/http: định nghĩa các phương thức http như GET, POST, PUT, DELETE
+	"sync"
 	"sync/atomic"
+	"time"
 )
+
+var metricClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     30 * time.Second,
+	},
+}
 
 func UpdateMetrics(
 	instance *models.Instance,
 ) {
-	resp, err := http.Get(
+	resp, err := metricClient.Get(
 		"http://"+instance.Address+"/metrics",
 	)
 	log.Printf(
@@ -23,9 +34,10 @@ func UpdateMetrics(
 		atomic.LoadInt32(&instance.ActiveRequest),
 	)
 
-	if err !=nil{
+	if err != nil {
 		return
 	}
+	defer resp.Body.Close()
 
 	var metrics models.MetricsResponse
 
@@ -34,18 +46,26 @@ func UpdateMetrics(
 	).Decode(
 		&metrics,
 	)
-
-	if err !=nil{
+	if err != nil {
 		return
 	}
 
 	atomic.StoreInt32(&instance.ActiveRequest, int32(metrics.ActiveRequests))
 }
 
-func UpdateAllMetrics(){
-	registry.RegistryMu.RLock() // Chỉ cho phép đọc không cho ghi
-	defer registry.RegistryMu.RUnlock()// Bảo vệ registry.Instance
-	for i := range registry.Instance{
-		UpdateMetrics(registry.Instance[i])
+func UpdateAllMetrics() {
+	registry.RegistryMu.RLock()
+	instances := make([]*models.Instance, len(registry.Instance))
+	copy(instances, registry.Instance)
+	registry.RegistryMu.RUnlock()
+
+	var wg sync.WaitGroup
+	for _, inst := range instances {
+		wg.Add(1)
+		go func(i *models.Instance) {
+			defer wg.Done()
+			UpdateMetrics(i)
+		}(inst)
 	}
+	wg.Wait()
 }

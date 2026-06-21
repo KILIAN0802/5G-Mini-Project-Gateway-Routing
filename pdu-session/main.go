@@ -2,11 +2,12 @@ package main
 
 import (
 	"encoding/json"
-	"os"
-	// "fmt"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -96,7 +97,7 @@ func Metrics(
 ){
 	resp := MetricsResponse{
 		InstanceID: instanceID,
-		ActiveRequests: GetActiveRequests(),
+		ActiveRequests: int(atomic.LoadInt64(&activeRequests)),
 	}
 
 	w.Header().Set(
@@ -108,17 +109,32 @@ func Metrics(
 
 var instanceID string
 
-var activeRequests int
+var activeRequests int64
 
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "unknown-ip"
+	}
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return "unknown-ip"
+}
 
 func main() {
 	instanceID = GetEnv("INSTANCE_ID", "")
 	if instanceID == "" {
-		if host, err := os.Hostname(); err == nil {
-			instanceID = host
-		}else{
-			instanceID = "pdu-unknown"
+		host, err := os.Hostname()
+		if err != nil {
+			host = "pdu-unknown"
 		}
+		ip := getLocalIP()
+		instanceID = host + " (" + ip + ")"
 	}
 
 	port := GetEnv(

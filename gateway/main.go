@@ -18,6 +18,15 @@ import (
 	"time"
 )
 
+var pduClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        10000,
+		MaxIdleConnsPerHost: 1000,
+		IdleConnTimeout:     30 * time.Second,
+	},
+}
+
 func ForwardToPDU(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -58,13 +67,22 @@ func ForwardToPDU(
 		selected.ID,
 	)
 
-	resp, err :=
-		http.Post(
+	req, err :=
+		http.NewRequest(
+			"POST",
 			"http://"+selected.Address+"/create-session",
-			"application/json",
 			bytes.NewBuffer(bodyBytes),
 		)
-
+	if err != nil {
+		http.Error(
+			w,
+			"Error creating request",
+			500,
+		)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := pduClient.Do(req)
 	if err != nil {
 		http.Error(
 			w,
@@ -76,9 +94,14 @@ func ForwardToPDU(
 
 	defer resp.Body.Close()
 
-	responseBody, _ := io.ReadAll(resp.Body)
-
-	w.Write(responseBody)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		http.Error(w, "Error forwarding response", 500)
+		log.Printf(
+			"Error forwarding response: %v",
+			err,
+		)
+		return
+	}
 }
 
 func main() {
