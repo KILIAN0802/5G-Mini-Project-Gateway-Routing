@@ -104,6 +104,32 @@ func ForwardToPDU(
 	}
 }
 
+func ListSessionsForward(w http.ResponseWriter, r *http.Request) {
+	selected := algorithm.SelectBackend(registry.GetHealthyInstance())
+	if selected == nil {
+		http.Error(w, "NO_BACKEND_AVAILABLE", 500)
+		return
+	}
+
+	req, err := http.NewRequest("GET", "http://"+selected.Address+"/list-sessions", nil)
+	if err != nil {
+		http.Error(w, "Error creating request", 500)
+		return
+	}
+
+	resp, err := pduClient.Do(req)
+	if err != nil {
+		log.Printf("ListSessionsForward error forwarding to %s: %v", selected.Address, err)
+		http.Error(w, "Backend Error: "+err.Error(), 500)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
+
+
 func main() {
 	// algorithm.SetStrategy(&algorithm.RoundRobin{})
 	// algorithm.SetStrategy(&algorithm.WeightedRR{})
@@ -122,6 +148,11 @@ func main() {
 	http.HandleFunc(
 		"/set-weight",
 		handler.SetWeight,
+	)
+
+	http.HandleFunc(
+		"/list-sessions",
+		ListSessionsForward,
 	)
 
 	log.Println(
@@ -149,4 +180,6 @@ func main() {
 		":8080",
 		nil,
 	)
+
+
 }

@@ -14,6 +14,19 @@ services:
     depends_on:
       - pdu-session
 
+  # Service is 
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+  redis-commander:
+    image: rediscommander/redis-commander
+    environment:
+      - REDIS_HOSTS=redis:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
     
   pdu-session:
     build:
@@ -22,10 +35,17 @@ services:
       - INSTANCE_ID=
       - PORT=9001 # Mỗi container sẽ có 1 IP riêng -> có port riêng
       - DELAY_MODE=random # Chế độ trễ: "fixed" hoặc "random"
+      - REDIS_ADDR=redis:6379
     deploy:
       replicas: 4
       resources:
         limits:
           cpus: "0.65"
+    depends_on:
+      - redis
+
+
+    
+  
 
   

@@ -90,6 +90,15 @@ func CreateSession(
 		"application/json",
 	) // Thiết lập HTTP header cho response
 	// w.WriteHeader(200)// 200 OK
+	reqJSON, errSave := json.Marshal(req)
+	if errSave == nil {
+		errRedis := SaveSessionInRedis(req.Supi, string(reqJSON))
+		if errRedis != nil {
+			log.Printf("[%s] Lưu session vào Redis thất bại: %v", instanceID, errRedis)
+		}
+	}else{
+		log.Printf("[%s] Chuyển request thành JSON thất bại: %v", instanceID, errSave)
+	}
 	json.NewEncoder(w).Encode(resp)
 
 }
@@ -143,6 +152,7 @@ func getLocalIP() string {
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	instanceID = GetEnv("INSTANCE_ID", "")
+	initRedis()
 	if instanceID == "" {
 		host, err := os.Hostname()
 		if err != nil {
@@ -164,6 +174,33 @@ func main() {
 	http.HandleFunc(
 		"/health",
 		HealthCheck,
+	)
+
+	http.HandleFunc(
+		"/list-sessions",
+		func(w http.ResponseWriter, r *http.Request){
+			log.Printf("[%s] API list-sessions duoc goi", instanceID)
+			data, err := GetAllSessionsFromRedis()
+			if err != nil {
+				log.Printf("[%s] Loi doc tu Redis: %v", instanceID, err)
+				http.Error(w, "Redis read error: "+err.Error(), 500)
+				return
+			}
+			parsedSessions := make(map[string] interface{})
+			for supi, rawJSON := range data {
+				var val interface{}
+				if err := json.Unmarshal([]byte(rawJSON), &val); err == nil {
+					parsedSessions[supi] = val
+				}else {
+					parsedSessions[supi] = rawJSON
+				}
+			}
+			w.Header().Set(
+				"Content-Type",
+				"application/json",
+			)
+			json.NewEncoder(w).Encode(parsedSessions)
+		},
 	)
 
 	log.Println("PDU Session started: " + port)

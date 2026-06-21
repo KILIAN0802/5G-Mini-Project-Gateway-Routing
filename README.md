@@ -140,3 +140,30 @@ go run .
 1. Chọn chế độ tự động bắn theo chu kỳ (mỗi 5-7 giây bắn 500 requests) để kiểm tra độ ổn định lâu dài của Gateway.
 2. Chọn chế độ bắn thủ công để kiểm tra sức chịu tải tức thời của hệ thống với số lượng request lớn tùy chọn.
 3. Nhấn **ESC** bất cứ lúc nào để dừng chương trình kiểm thử.
+
+### Bước 4: Kiểm tra dữ liệu Session Context trong Database (Redis)
+Bạn có thể theo dõi và thống kê dữ liệu session context đã được tạo thành công bằng 3 cách:
+
+#### **Cách 1: Sử dụng Giao diện Web (Redis Commander)**
+1. Mở trình duyệt và truy cập: **`http://localhost:8081`**
+2. Ở danh sách bên trái, click vào nút mũi tên (hình tam giác) để mở rộng kết nối **`redis (redis:6379:0)`**.
+3. Click tiếp vào nút mũi tên bên cạnh thư mục **`session:* (500)`** để mở rộng và xem danh sách toàn bộ các session keys.
+4. Chọn một key con bất kỳ (ví dụ: `session:imsi-...`) để xem chi tiết dữ liệu JSON của phiên kết nối ở khung bên phải.
+
+#### **Cách 2: Sử dụng API của Gateway**
+Gửi yêu cầu HTTP GET tới Gateway để lấy danh sách toàn bộ các session lưu trữ trong database:
+```bash
+curl.exe http://localhost:8080/list-sessions
+```
+
+#### **Cách 3: Sử dụng dòng lệnh trực tiếp (Redis CLI)**
+1. Vào container chứa Redis:
+   ```bash
+   docker compose exec redis redis-cli
+   ```
+2. Gõ các lệnh tương tác:
+   * `DBSIZE`: Xem tổng số lượng session.
+   * `KEYS *`: Liệt kê tất cả các keys.
+   * `GET session:<supi>`: Xem dữ liệu chi tiết của thuê bao cụ thể.
+   * `exit`: Thoát ra ngoài.
+
