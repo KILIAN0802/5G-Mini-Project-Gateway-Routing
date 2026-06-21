@@ -24,7 +24,7 @@ func GetInstances(w http.ResponseWriter, r *http.Request) {
 		resp[i] = InstanceDebugResponse{
 			ID:             inst.ID,
 			ActiveRequests: int(atomic.LoadInt32(&inst.ActiveRequest)),
-			Weight:         inst.Weight,
+			Weight:         int(atomic.LoadInt32(&inst.Weight)),
 		}
 	}
 
@@ -54,7 +54,7 @@ func SetWeight(w http.ResponseWriter, r *http.Request) {
 	found := false
 	for _, inst := range registry.Instance {
 		if inst.Address == addr {
-			inst.Weight = weight
+			atomic.StoreInt32(&inst.Weight, int32(weight))
 			found = true
 			break
 		}

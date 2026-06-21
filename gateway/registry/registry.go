@@ -3,9 +3,10 @@ package registry
 import (
 	"gateway/models"
 	"log"
-	"sync"
-	"time"
 	"net"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
 func GetHealthyInstance() []*models.Instance {
@@ -15,7 +16,7 @@ func GetHealthyInstance() []*models.Instance {
 
 	var healthy []*models.Instance // slice sẽ chứa những pdu instance đang hoạt động
 	for i := range Instance {
-		if Instance[i].Healthy {
+		if Instance[i].Healthy.Load() {
 			healthy =
 				append(
 					healthy,
@@ -65,7 +66,7 @@ func ServiceDiscovery() {
 				Instance = append(Instance, &models.Instance{
 					ID: "Instance:"+ addr,
 					Address: addr,
-					Healthy: false,
+					Healthy: atomic.Bool{},
 					Weight: 1,
 				})
 				log.Println("New instance added: ", addr)

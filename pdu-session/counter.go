@@ -2,27 +2,19 @@ package main
 
 import (
 	"log"
-	"sync"
+	"sync/atomic"
 )
 
-var requestMutex sync.Mutex
-
 func IncrementActiveRequest(){
-	requestMutex.Lock()
-	activeRequests++
-	log.Printf("active=%d", activeRequests)
-	requestMutex.Unlock()
+	newVal := atomic.AddInt64(&activeRequests, 1)
+	log.Printf("active=%d", newVal)
 }
 
 func DecrementActiveRequest(){
-	requestMutex.Lock()
-	activeRequests--
-	log.Printf("active=%d", activeRequests)
-	requestMutex.Unlock()
+	newVal := atomic.AddInt64(&activeRequests, -1)
+	log.Printf("active=%d", newVal)
 }
 
-func GetActiveRequests() int {
-	requestMutex.Lock()
-	defer requestMutex.Unlock()
-	return activeRequests
+func GetActiveRequests() int64 {
+	return atomic.LoadInt64(&activeRequests)
 }
