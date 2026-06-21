@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -48,7 +49,20 @@ func CreateSession(
 	IncrementActiveRequest()
 	defer DecrementActiveRequest()
 	
-	time.Sleep(50 * time.Millisecond)
+	delayMode := GetEnv("DELAY_MODE", "fixed")
+	var delayDuration time.Duration
+
+	if delayMode == "random" {
+		// Sinh ngẫu nhiên thời gian xử lý: random % 20 giây (0 -> 19s)
+		delaySeconds := rand.Intn(20)
+		delayDuration = time.Duration(delaySeconds) * time.Second
+	} else {
+		// Mặc định cố định 15 giây
+		delayDuration = 15 * time.Second
+	}
+
+	log.Printf("[%s] Bat dau xu ly session, sleep %v", instanceID, delayDuration)
+	time.Sleep(delayDuration)
 	var req CreateSessionRequest
 
 	err := json.NewDecoder(
@@ -127,6 +141,7 @@ func getLocalIP() string {
 }
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
 	instanceID = GetEnv("INSTANCE_ID", "")
 	if instanceID == "" {
 		host, err := os.Hostname()

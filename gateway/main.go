@@ -19,7 +19,7 @@ import (
 )
 
 var pduClient = &http.Client{
-	Timeout: 10 * time.Second,
+	Timeout: 30 * time.Second,
 	Transport: &http.Transport{
 		MaxIdleConns:        10000,
 		MaxIdleConnsPerHost: 1000,
@@ -106,8 +106,8 @@ func ForwardToPDU(
 
 func main() {
 	// algorithm.SetStrategy(&algorithm.RoundRobin{})
-	algorithm.SetStrategy(&algorithm.WeightedRR{})
-	//algorithm.SetStrategy(&algorithm.LoadBalancer{})
+	// algorithm.SetStrategy(&algorithm.WeightedRR{})
+	algorithm.SetStrategy(&algorithm.LoadBalancer{})
 
 	http.HandleFunc(
 		"/nsmf-pdusession/v1/sm-contexts",

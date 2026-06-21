@@ -21,6 +21,7 @@ services:
     environment:
       - INSTANCE_ID=
       - PORT=9001 # Mỗi container sẽ có 1 IP riêng -> có port riêng
+      - DELAY_MODE=random # Chế độ trễ: "fixed" hoặc "random"
     deploy:
       replicas: 4
       resources:
