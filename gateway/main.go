@@ -4,7 +4,9 @@ import (
 	"bytes" // Cung cấp các hàm để thao tác với kiểu dữ liệu byte -> Thường dùng để tạo buffer cho việc đọc / ghi dữ liệu
 	"io"    // Cung cấp các interface chuẩn để đọc/ghi dữ liệu
 	"log"
+	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	// Cho phép:
@@ -18,8 +20,9 @@ import (
 	"time"
 )
 
+// Notice
 var pduClient = &http.Client{
-	Timeout: 30 * time.Second,
+	Timeout: 90 * time.Second,
 	Transport: &http.Transport{
 		MaxIdleConns:        10000,
 		MaxIdleConnsPerHost: 1000,
@@ -129,6 +132,102 @@ func ListSessionsForward(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+type RateLimiter struct {
+	rate       float64
+	capacity   float64
+	tokens     float64
+	lastRefill time.Time
+	mu         sync.Mutex
+}
+
+func NewRateLimiter(rate float64, capacity float64) *RateLimiter {
+	return &RateLimiter{
+		rate:       rate,
+		capacity:   capacity,
+		tokens:     capacity,
+		lastRefill: time.Now(),
+	}
+}
+
+func (rl *RateLimiter) Allow() bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(rl.lastRefill).Seconds()
+	rl.lastRefill = now
+
+	rl.tokens += elapsed * rl.rate
+	if rl.tokens > rl.capacity {
+		rl.tokens = rl.capacity
+	}
+
+	if rl.tokens >= 1.0 {
+		rl.tokens -= 1.0
+		return true
+	}
+	return false
+}
+
+func (rl *RateLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !rl.Allow() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(429)
+		w.Write([]byte(`{"error": "Too Many Requests", "status": 429}`))
+		return
+	}
+	http.DefaultServeMux.ServeHTTP(w, r)
+}
+
+type limitListener struct {
+	net.Listener
+	sem chan struct{} // Mỗi phần tử chiếm 0 byte trong mem
+}
+
+func LimitListener(l net.Listener, n int) net.Listener {
+	return &limitListener{
+		Listener: l,
+		sem: make(chan struct{}, n),
+	}
+}
+
+func (l *limitListener) Accept() (net.Conn, error) {
+	// 1. Chiếm 1 slot kết nối ( Nếu channel đầy -> block)
+	l.sem<-struct{}{}
+	// 2. Chấp nhận kết nối từ listener gốc
+	c, err := l.Listener.Accept()
+	if err != nil {
+		<-l.sem // Giải phóng slot nếu bị lỗi
+		return nil, err
+	}
+	// 3. Trả về 1 connection wrapper 
+	return &LimitListenerConn{
+		Conn: c, 
+		sem: l.sem,
+	}, nil
+}
+
+// Định nghĩa Connection Wrapper
+type LimitListenerConn struct {
+	net.Conn
+	releaseOnce sync.Once 
+	// Đảm báo chỉ giải phóng slot 1 lần ! cho mỗi connection
+	sem chan struct{}
+}
+
+// Override hàm close để giải phóng slot trong channel
+
+func (c * LimitListenerConn) Close() error {
+	// Gọi Close của connection gốc
+	err := c.Conn.Close()
+
+	// Giải phóng 1 slot trong sem, nhưng đảm bảo chỉ chạy 1 lần
+	c.releaseOnce.Do(func() {
+		<- c.sem
+	})
+	return err
+}
+
 
 func main() {
 	// algorithm.SetStrategy(&algorithm.RoundRobin{})
@@ -176,10 +275,13 @@ func main() {
 	}()
 
 	go registry.ServiceDiscovery()
-	http.ListenAndServe(
-		":8080",
-		nil,
-	)
-
-
+	listener, err := net.Listen("tcp", ":8080")
+	if err != nil {
+		log.Fatalf("Failed to listen on :8080: %v", err)
+	}
+	// LimitListener giới hạn số lượng kết nối đồng thời
+	limitedListener := LimitListener(listener, 10000)
+	// Rate Limiter
+	limiter := NewRateLimiter(20000, 10000)
+	http.Serve(limitedListener, limiter)
 }
