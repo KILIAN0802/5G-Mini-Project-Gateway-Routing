@@ -3,12 +3,14 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -16,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/http2"
 )
 
 type Config struct {
@@ -57,7 +61,7 @@ func resetMetrics() {
 	mapMutex.Unlock()
 }
 
-func runBenchmark(client *http.Client, TotalRequests int, concurrency int) {
+func runBenchmark(clients []*http.Client, TotalRequests int, concurrency int) {
 	resetMetrics()
 
 	var wg sync.WaitGroup
@@ -79,8 +83,9 @@ func runBenchmark(client *http.Client, TotalRequests int, concurrency int) {
 	// Khởi chạy worker pool
 	for w := 0; w < concurrency; w++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
+			client := clients[workerID % len(clients)]
 			for reqID := range jobs {
 				requestData := map[string]interface{}{
 					"supi":         fmt.Sprintf("%s%010d", config.SupiBase, reqID),
@@ -143,7 +148,7 @@ func runBenchmark(client *http.Client, TotalRequests int, concurrency int) {
 				handledMap[result.Handleby]++
 				mapMutex.Unlock()
 			}
-		}()
+		}(w)
 	}
 
 	wg.Wait()
@@ -185,14 +190,12 @@ func main() {
 
 	//Notice
 	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
+		Transport: &http2.Transport{
+			AllowHTTP: true,
+			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, network, addr)
 			},
-			MaxIdleConns:        10000,
-			MaxConnsPerHost:     10000,
-			MaxIdleConnsPerHost: 1000,
-			IdleConnTimeout:     90 * time.Second,
 		},
 		Timeout: config.ClientTimeout,
 	}
@@ -206,9 +209,8 @@ func main() {
 	fmt.Println("=========================")
 	fmt.Println("Chọn chế độ bắn request:")
 	fmt.Println("1. Tự động bắn theo chu kỳ 5 - 7 giây (mỗi chu kỳ 500 requests, nhấn ESC để dừng)")
-	fmt.Println("2. Nhập thủ công số lượng từ terminal (Số lượng worker = Số lượng request)")
-	fmt.Println("3. Nhập thủ công số lượng và số Worker ")
-	fmt.Print("Lựa chọn của bạn (1, 2 hoặc 3): ")
+	fmt.Println("2. Nhập thủ công số lượng từ terminal (Thiết lập số request, connection và worker)")
+	fmt.Print("Lựa chọn của bạn (1 hoặc 2): ")
 
 	choiceStr, _ := reader.ReadString('\n')
 	choiceStr = strings.TrimSpace(choiceStr)
@@ -221,7 +223,7 @@ func main() {
 			}
 
 			fmt.Printf("\n--- [Chu kỳ %d] Bắt đầu bắn 500 requests ---\n", cycle)
-			runBenchmark(client, 500, 500)
+			runBenchmark([]*http.Client{client}, 500, 500)
 
 			// Ngẫu nhiên chu kỳ 5 đến 7 giây
 			intervalSeconds := 5 + rand.Intn(3)
@@ -290,37 +292,24 @@ func main() {
 				continue
 			}
 
-			fmt.Printf("Đang bắn  %d requests\n", numRequests)
-			runBenchmark(client, numRequests, numRequests)
-		}
-	} else if choiceStr == "3" {
-		for {
-			if IsEscPressed() {
-				break
-			}
-
-			fmt.Print("\nNhập số lượng request muốn bắn: ")
-
-			// Đọc input một cách phi chặn để cho phép nhấn ESC dừng chương trình khi đang đợi input
-			inputCh := make(chan string, 1)
+			// Hỏi số lượng connection
+			fmt.Print("Nhập số lượng connection (mặc định 1): ")
+			inputConnCh := make(chan string, 1)
 			go func() {
-				input, _ := reader.ReadString('\n')
-				inputCh <- input
+				inputC, _ := reader.ReadString('\n')
+				inputConnCh <- inputC
 			}()
 
-			var input string
-			stop := false
+			var inputConn string
 			for {
 				select {
-				case input = <-inputCh:
-					// Nhận dữ liệu nhập từ bàn phím
+				case inputConn = <-inputConnCh:
 				case <-time.After(100 * time.Millisecond):
-					// Liên tục kiểm tra phím ESC
 					if IsEscPressed() {
 						stop = true
 					}
 				}
-				if input != "" || stop {
+				if inputConn != "" || stop {
 					break
 				}
 			}
@@ -329,18 +318,14 @@ func main() {
 				break
 			}
 
-			input = strings.TrimSpace(input)
-			if input == "exit" || input == "quit" {
-				break
+			inputConn = strings.TrimSpace(inputConn)
+			numConnections, err := strconv.Atoi(inputConn)
+			if err != nil || numConnections <= 0 {
+				numConnections = 1
 			}
 
-			numRequests, err := strconv.Atoi(input)
-			if err != nil || numRequests <= 0 {
-				fmt.Println("Số lượng không hợp lệ. Vui lòng nhập số nguyên dương.")
-				continue
-			}
-
-			fmt.Print("Nhập số lượng Worker song song (ví dụ 100): ")
+			// Hỏi số lượng worker song song
+			fmt.Print("Nhập số lượng Worker song song (mặc định 100): ")
 			inputWorkerCh := make(chan string, 1)
 			go func() {
 				inputW, _ := reader.ReadString('\n')
@@ -366,16 +351,28 @@ func main() {
 			}
 
 			inputWorker = strings.TrimSpace(inputWorker)
-			if inputWorker == "exit" || inputWorker == "quit" {
-				break
-			}
-
 			numWorkers, err := strconv.Atoi(inputWorker)
 			if err != nil || numWorkers <= 0 {
 				numWorkers = 100
 			}
 
-			runBenchmark(client, numRequests, numWorkers)
+			// Tạo client pool tương ứng với số connection mong muốn
+			clients := make([]*http.Client, numConnections)
+			for i := 0; i < numConnections; i++ {
+				clients[i] = &http.Client{
+					Transport: &http2.Transport{
+						AllowHTTP: true,
+						DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+							var d net.Dialer
+							return d.DialContext(ctx, network, addr)
+						},
+					},
+					Timeout: config.ClientTimeout,
+				}
+			}
+
+			fmt.Printf("Đang bắn %d requests qua %d TCP Connections song song với %d Workers\n", numRequests, numConnections, numWorkers)
+			runBenchmark(clients, numRequests, numWorkers)
 		}
 	}
 }

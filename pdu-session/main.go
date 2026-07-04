@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 type SNssai struct {
@@ -209,10 +211,17 @@ func main() {
 		"/metrics",
 		Metrics,
 	)
-	
-	http.ListenAndServe(
-		":"+port, // Cổng
-		nil,
-	)
+
+	h2s := &http2.Server{}
+	h2cHandler := h2c.NewHandler(http.DefaultServeMux, h2s)
+
+	server := &http.Server{
+		Addr: ":" + port,
+		Handler: h2cHandler,
+	}
+
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatal("Server failed:", err)
+	}
 
 }

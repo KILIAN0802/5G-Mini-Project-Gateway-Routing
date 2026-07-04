@@ -3,6 +3,8 @@ package main
 import (
 	"bytes" // Cung cấp các hàm để thao tác với kiểu dữ liệu byte -> Thường dùng để tạo buffer cho việc đọc / ghi dữ liệu
 	"io"    // Cung cấp các interface chuẩn để đọc/ghi dữ liệu
+	"context"
+	"crypto/tls"
 	"log"
 	"net"
 	"net/http"
@@ -18,15 +20,20 @@ import (
 	"gateway/health"
 	"gateway/registry"
 	"time"
+
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 // Notice
 var pduClient = &http.Client{
 	Timeout: 90 * time.Second,
-	Transport: &http.Transport{
-		MaxIdleConns:        10000,
-		MaxIdleConnsPerHost: 1000,
-		IdleConnTimeout:     30 * time.Second,
+	Transport: &http2.Transport{
+		AllowHTTP: true,
+		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error){
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		},
 	},
 }
 
@@ -50,7 +57,7 @@ func ForwardToPDU(
 		http.Error(
 			w,
 			"NO_BACKEND_AVAILABLE",
-			500,
+			503,
 		)
 		return
 	}
@@ -176,6 +183,7 @@ func (rl *RateLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"error": "Too Many Requests", "status": 429}`))
 		return
 	}
+	// Router ( DefaultServeMux ) tìm xem handle nào match với URL -> Serve 
 	http.DefaultServeMux.ServeHTTP(w, r)
 }
 
@@ -283,5 +291,6 @@ func main() {
 	limitedListener := LimitListener(listener, 10000)
 	// Rate Limiter
 	limiter := NewRateLimiter(20000, 10000)
-	http.Serve(limitedListener, limiter)
+	h2s := &http2.Server{}
+	http.Serve(limitedListener, h2c.NewHandler(limiter, h2s))
 }
