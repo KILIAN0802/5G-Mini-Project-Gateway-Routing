@@ -288,9 +288,19 @@ func main() {
 		log.Fatalf("Failed to listen on :8080: %v", err)
 	}
 	// LimitListener giới hạn số lượng kết nối đồng thời
-	limitedListener := LimitListener(listener, 10000)
+	// limitedListener := LimitListener(listener, 20)
 	// Rate Limiter
 	limiter := NewRateLimiter(20000, 10000)
 	h2s := &http2.Server{}
-	http.Serve(limitedListener, h2c.NewHandler(limiter, h2s))
+	server := &http.Server{
+		Handler: h2c.NewHandler(limiter, h2s),
+		IdleTimeout: 10* time.Second,
+		ReadTimeout: 5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	log.Println("Gateway started: 8080")
+	if err := server.Serve(listener); err != nil {
+		log.Fatalf("Error starting server: %v", err)
+	}
 }

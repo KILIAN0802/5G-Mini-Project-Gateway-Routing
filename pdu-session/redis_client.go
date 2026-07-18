@@ -11,18 +11,61 @@ import (
 	"time"
 )
 
-var redisAddr string
-
-// initRedis lấy địa chỉ từ biến môi trường
-
-func initRedis() {
-	redisAddr = GetEnv("REDIS_ADDR", "redis:6379")
+type redisConn struct {
+	net.Conn
+	rd *bufio.Reader
 }
 
-// getRedisConn tạo kết nối TCP tới Redis
+var (
+	redisAddr string
+	pool      chan *redisConn
+)
 
-func getRedisConn() (net.Conn, error){
-	return net.DialTimeout("tcp", redisAddr, 5*time.Second)
+// initRedis lấy địa chỉ từ biến môi trường và khởi tạo Connection Pool
+func initRedis() {
+	redisAddr = GetEnv("REDIS_ADDR", "redis:6379")
+	limitStr := GetEnv("REDIS_POOL_SIZE", "150")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 {
+		limit = 150
+	}
+	pool = make(chan *redisConn, limit)
+}
+
+// getRedisConn lấy kết nối từ pool hoặc tạo mới nếu pool trống
+func getRedisConn() (*redisConn, error) {
+	select {
+	case conn := <-pool:
+		return conn, nil
+	default:
+		c, err := net.DialTimeout("tcp", redisAddr, 5*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		if tcpConn, ok := c.(*net.TCPConn); ok {
+			tcpConn.SetKeepAlive(true)
+			tcpConn.SetKeepAlivePeriod(30 * time.Second)
+		}
+		return &redisConn{
+			Conn: c,
+			rd:   bufio.NewReader(c),
+		}, nil
+	}
+}
+
+// releaseRedisConn trả lại kết nối vào pool hoặc đóng nếu có lỗi
+func releaseRedisConn(conn *redisConn, err error) {
+	if err != nil {
+		conn.Close()
+		return
+	}
+	select {
+	case pool <- conn:
+		// Trả về pool thành công
+	default:
+		// Pool đầy, đóng kết nối
+		conn.Close()
+	}
 }
 
 // SaveSessionInRedis lưu thông tin session dạng JSON vào Redis
@@ -31,7 +74,11 @@ func SaveSessionInRedis(supi string, data string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	var opErr error
+	defer func() {
+		releaseRedisConn(conn, opErr)
+	}()
+
 	key := "session:" + supi
 	// Gửi lệnh SET key value theo định dạng RESP
 	var buf bytes.Buffer
@@ -39,42 +86,46 @@ func SaveSessionInRedis(supi string, data string) error {
 	buf.WriteString("$3\r\nSET\r\n")
 	buf.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(key), key))
 	buf.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(data), data))
-	_, err = conn.Write(buf.Bytes())
-	if err != nil {
-		return err
+	_, opErr = conn.Write(buf.Bytes())
+	if opErr != nil {
+		return opErr
 	}
-	// Đọc phản hồi
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return err
+	// Đọc phản hồi từ connection reader
+	line, opErr := conn.rd.ReadString('\n')
+	if opErr != nil {
+		return opErr
 	}
 	if line[0] == '-' {
-		return fmt.Errorf("redis error: %s", strings.TrimSpace(line[1:]))
+		opErr = fmt.Errorf("redis error: %s", strings.TrimSpace(line[1:]))
+		return opErr
 	}
 	return nil
 }
+
 // GetAllSessionsFromRedis lấy danh sách toàn bộ session
 func GetAllSessionsFromRedis() (map[string]string, error) {
 	conn, err := getRedisConn()
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	var opErr error
+	defer func() {
+		releaseRedisConn(conn, opErr)
+	}()
+
 	// Gửi lệnh KEYS session:*
 	var buf bytes.Buffer
 	buf.WriteString("*2\r\n")
 	buf.WriteString("$4\r\nKEYS\r\n")
 	pattern := "session:*"
 	buf.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(pattern), pattern))
-	_, err = conn.Write(buf.Bytes())
-	if err != nil {
-		return nil, err
+	_, opErr = conn.Write(buf.Bytes())
+	if opErr != nil {
+		return nil, opErr
 	}
-	reader := bufio.NewReader(conn)
-	keys, err := readRESPArray(reader)
-	if err != nil {
-		return nil, err
+	keys, opErr := readRESPArray(conn.rd)
+	if opErr != nil {
+		return nil, opErr
 	}
 	sessions := make(map[string]string)
 	if len(keys) == 0 {
@@ -88,13 +139,13 @@ func GetAllSessionsFromRedis() (map[string]string, error) {
 	for _, key := range keys {
 		buf.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(key), key))
 	}
-	_, err = conn.Write(buf.Bytes())
-	if err != nil {
-		return nil, err
+	_, opErr = conn.Write(buf.Bytes())
+	if opErr != nil {
+		return nil, opErr
 	}
-	values, err := readRESPArray(reader)
-	if err != nil {
-		return nil, err
+	values, opErr := readRESPArray(conn.rd)
+	if opErr != nil {
+		return nil, opErr
 	}
 
 	for i, key := range keys {

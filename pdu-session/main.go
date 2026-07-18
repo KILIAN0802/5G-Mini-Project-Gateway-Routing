@@ -218,6 +218,7 @@ func main() {
 	server := &http.Server{
 		Addr: ":" + port,
 		Handler: h2cHandler,
+		IdleTimeout: 10 * time.Second, 
 	}
 
 	if err := server.ListenAndServe(); err != nil {

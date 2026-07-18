@@ -154,15 +154,17 @@ func runBenchmark(clients []*http.Client, TotalRequests int, concurrency int) {
 	wg.Wait()
 
 	duration := time.Since(startTime)
-	tps := float64(TotalRequests) / duration.Seconds()
+	success := atomic.LoadInt64(&successCount)
+	tpsSend := float64(TotalRequests) / duration.Seconds()
+	tpsSuccess := float64(success) / duration.Seconds()
 	log.Printf("=== KẾT QUẢ TEST TẢI ĐỒNG THỜI ===")
 	log.Printf("Thời gian chạy: %s", duration)
 	log.Printf("Tổng số Request gửi đi: %d", TotalRequests)
-	log.Printf("Thành công: %d", atomic.LoadInt64(&successCount))
+	log.Printf("Thành công: %d", success)
 	log.Printf("Thất bại (lỗi kết nối/timeout/sai luồng): %d", atomic.LoadInt64(&failCount))
-	log.Printf("TPS: %.2f", tps)
+	log.Printf("TPS gửi đi: %.2f req/s", tpsSend)
+	log.Printf("TPS thành công: %.2f req/s", tpsSuccess)
 
-	success := atomic.LoadInt64(&successCount)
 	// if success > 0 {
 	// 	log.Printf("Độ trễ trung bình: %.2fms", float64(atomic.LoadInt64(&totalLatency))/float64(success))
 	// }
@@ -188,64 +190,14 @@ func main() {
 		config.targetURL = envURL
 	}
 
-	//Notice
-	client := &http.Client{
-		Transport: &http2.Transport{
-			AllowHTTP: true,
-			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, network, addr)
-			},
-		},
-		Timeout: config.ClientTimeout,
-	}
 
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("=== CẤU HÌNH KIỂM THỬ ===")
 	fmt.Printf("Đường dẫn đích (Target): %s\n", config.targetURL)
 	fmt.Printf("HTTP Client Timeout: %v\n", config.ClientTimeout)
-	fmt.Println("Chế độ: Bắn đồng thời toàn bộ luồng (Không giới hạn)")
-	fmt.Println("=========================")
-	fmt.Println("Chọn chế độ bắn request:")
-	fmt.Println("1. Tự động bắn theo chu kỳ 5 - 7 giây (mỗi chu kỳ 500 requests, nhấn ESC để dừng)")
-	fmt.Println("2. Nhập thủ công số lượng từ terminal (Thiết lập số request, connection và worker)")
-	fmt.Print("Lựa chọn của bạn (1 hoặc 2): ")
 
-	choiceStr, _ := reader.ReadString('\n')
-	choiceStr = strings.TrimSpace(choiceStr)
-
-	if choiceStr == "1" {
-		cycle := 1
-		for {
-			if IsEscPressed() {
-				break
-			}
-
-			fmt.Printf("\n--- [Chu kỳ %d] Bắt đầu bắn 500 requests ---\n", cycle)
-			runBenchmark([]*http.Client{client}, 500, 500)
-
-			// Ngẫu nhiên chu kỳ 5 đến 7 giây
-			intervalSeconds := 5 + rand.Intn(3)
-			fmt.Printf("--- [Chu kỳ %d] Hoàn thành. Đợi %d giây cho chu kỳ tiếp theo (Hoặc nhấn ESC để dừng)... ---\n", cycle, intervalSeconds)
-
-			// Chia nhỏ giấc ngủ để liên tục kiểm tra phím ESC
-			stop := false
-			sleepSteps := intervalSeconds * 10
-			for i := 0; i < sleepSteps; i++ {
-				if IsEscPressed() {
-					fmt.Println("\n[!] Đã nhận phím ESC. Đang dừng chương trình...")
-					stop = true
-					break
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
-			if stop {
-				break
-			}
-			cycle++
-		}
-	} else if choiceStr == "2" {
+		var activeClients []*http.Client
 		for {
 			if IsEscPressed() {
 				break
@@ -355,75 +307,24 @@ func main() {
 			if err != nil || numWorkers <= 0 {
 				numWorkers = 100
 			}
-
-			// Tạo client pool tương ứng với số connection mong muốn
-			clients := make([]*http.Client, numConnections)
-			for i := 0; i < numConnections; i++ {
-				clients[i] = &http.Client{
-					Transport: &http2.Transport{
-						AllowHTTP: true,
-						DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
-							var d net.Dialer
-							return d.DialContext(ctx, network, addr)
+			if len(activeClients) != numConnections {
+				activeClients = make([]*http.Client, numConnections)
+				for i:= 0; i< numConnections; i++ {
+					activeClients[i] = &http.Client{
+						Transport: &http2.Transport{
+							AllowHTTP: true,
+							DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+								var dial net.Dialer
+								return dial.DialContext(ctx, network, addr)
+							},
 						},
-					},
-					Timeout: config.ClientTimeout,
+						Timeout: config.ClientTimeout,
+					}
 				}
 			}
-
-			fmt.Printf("Đang bắn %d requests qua %d TCP Connections song song với %d Workers\n", numRequests, numConnections, numWorkers)
-			runBenchmark(clients, numRequests, numWorkers)
+			runBenchmark(activeClients, numRequests, numWorkers)
 		}
 	}
-}
 
-// sendRequest gửi một request và tính toán độ trễ, số liệu
-func sendRequest(client *http.Client, reqID int) {
-	requestData := map[string]interface{}{
-		"supi":         fmt.Sprintf("%s%06d", config.SupiBase, reqID),
-		"gpsi":         "0919213419",
-		"pduSessionId": reqID,
-		"dnn":          "internet",
-		"sNssai": map[string]interface{}{
-			"sst": 1,
-			"sd":  "000001",
-		},
-		"servingNfid": "amf-1",
-		"anType":      "3GPP",
-	}
 
-	jsonData, err := json.Marshal(requestData)
-	if err != nil {
-		atomic.AddInt64(&failCount, 1)
-		return
-	}
 
-	startTime := time.Now()
-	resp, err := client.Post(config.targetURL, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		atomic.AddInt64(&failCount, 1)
-		return
-	}
-	defer resp.Body.Close()
-
-	latency := time.Since(startTime).Milliseconds()
-
-	if resp.StatusCode != 200 {
-		atomic.AddInt64(&failCount, 1)
-		return
-	}
-
-	var result CreatSessionResponse
-	err = json.NewDecoder(resp.Body).Decode(&result)
-	if err != nil {
-		atomic.AddInt64(&failCount, 1)
-		return
-	}
-
-	atomic.AddInt64(&successCount, 1)
-	atomic.AddInt64(&totalLatency, latency)
-
-	mapMutex.Lock()
-	handledMap[result.Handleby]++
-	mapMutex.Unlock()
-}
