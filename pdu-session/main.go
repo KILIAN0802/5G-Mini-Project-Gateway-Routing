@@ -92,15 +92,17 @@ func CreateSession(
 		"application/json",
 	) // Thiết lập HTTP header cho response
 	// w.WriteHeader(200)// 200 OK
-	reqJSON, errSave := json.Marshal(req)
-	if errSave == nil {
-		errRedis := SaveSessionInRedis(req.Supi, string(reqJSON))
-		if errRedis != nil {
-			log.Printf("[%s] Lưu session vào Redis thất bại: %v", instanceID, errRedis)
-		}
-	}else{
-		log.Printf("[%s] Chuyển request thành JSON thất bại: %v", instanceID, errSave)
-	}
+	// reqJSON, errSave := json.Marshal(req)
+	// if errSave == nil {
+	// go func ()  {
+	// 	errRedis := SaveSessionInRedis(req.Supi, string(reqJSON))
+	// 	if errRedis != nil {
+	// 		log.Printf("[%s] Lưu session vào Redis thất bại: %v", instanceID, errRedis)
+	// 	}
+	// }()
+	// }else{
+	// 	log.Printf("[%s] Chuyển request thành JSON thất bại: %v", instanceID, errSave)
+	// }
 	json.NewEncoder(w).Encode(resp)
 
 }
