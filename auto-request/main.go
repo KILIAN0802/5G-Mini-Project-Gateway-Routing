@@ -18,7 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
+	"github.com/shirou/gopsutil/v3/cpu"
 	"golang.org/x/net/http2"
 )
 
@@ -61,8 +61,24 @@ func resetMetrics() {
 	mapMutex.Unlock()
 }
 
+func getGatewayBaseURL() string {
+	parts := strings.Split(config.targetURL, "/")
+	if len(parts) >= 3 {
+		return parts[0] + "//" + parts[2]
+	}
+	return "http://gateway:8080"
+}
+
 func runBenchmark(clients []*http.Client, TotalRequests int, concurrency int) {
 	resetMetrics()
+
+	gwBase := getGatewayBaseURL()
+	// Gửi yêu cầu reset metrics trước khi bắt đầu test tải
+	if req, err := http.NewRequest("POST", gwBase+"/reset-cluster-metrics", nil); err == nil {
+		if resp, err := clients[0].Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}
 
 	var wg sync.WaitGroup
 	jobs := make(chan int, TotalRequests)
@@ -77,6 +93,31 @@ func runBenchmark(clients []*http.Client, TotalRequests int, concurrency int) {
 	if concurrency <= 0 {
 		concurrency = TotalRequests
 	}
+
+	numCores, _ := cpu.Counts(true)
+	peakCores := make([]float64, numCores)
+	stopCPU := make(chan struct{})
+
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				percentages, err := cpu.Percent(0, true)
+				if err == nil {
+					for i, pct := range percentages {
+						if i < len(peakCores) && pct > peakCores[i] {
+							peakCores[i] = pct
+						}
+					}	
+				}
+			case <-stopCPU:
+				return
+			}
+		}
+	}()
 
 	startTime := time.Now()
 
@@ -152,6 +193,7 @@ func runBenchmark(clients []*http.Client, TotalRequests int, concurrency int) {
 	}
 
 	wg.Wait()
+	close(stopCPU)	
 
 	duration := time.Since(startTime)
 	success := atomic.LoadInt64(&successCount)
@@ -164,6 +206,32 @@ func runBenchmark(clients []*http.Client, TotalRequests int, concurrency int) {
 	log.Printf("Thất bại (lỗi kết nối/timeout/sai luồng): %d", atomic.LoadInt64(&failCount))
 	log.Printf("TPS gửi đi: %.2f req/s", tpsSend)
 	log.Printf("TPS thành công: %.2f req/s", tpsSuccess)
+	
+	type PduMetrics struct {
+		InstanceID     string  `json:"instanceID"`
+		ActiveRequests int     `json:"activeRequests"`
+		PeakCPU        float64 `json:"peakCpu"`
+	}
+
+	type ClusterMetricsResponse struct {
+		GatewayPeakCPU float64               `json:"gatewayPeakCpu"`
+		Instances      map[string]PduMetrics `json:"instances"`
+	}
+
+	resp, err := clients[0].Get(gwBase + "/cluster-metrics")
+	if err == nil && resp.StatusCode == 200 {
+		var clusterRes ClusterMetricsResponse
+		if json.NewDecoder(resp.Body).Decode(&clusterRes) == nil {
+			log.Printf("=== HIỆU NĂNG ĐỈNH (PEAK CPU) TOÀN HỆ THỐNG ===")
+			log.Printf("[Gateway Container] Peak CPU: %.2f%%", clusterRes.GatewayPeakCPU)
+			for addr, inst := range clusterRes.Instances {
+				log.Printf("[%s (%s)] Peak CPU: %.2f%%", inst.InstanceID, addr, inst.PeakCPU)
+			}
+		}
+		resp.Body.Close()
+	}
+
+	
 
 	// if success > 0 {
 	// 	log.Printf("Độ trễ trung bình: %.2fms", float64(atomic.LoadInt64(&totalLatency))/float64(success))

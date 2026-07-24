@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
 	"encoding/json"
 	"log"
 	"math/rand"
@@ -10,9 +13,85 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"github.com/shirou/gopsutil/v3/cpu"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
+
+func getCGroupCPUUsage() (int64, error) {
+	// 1. Thử đọc cgroup v2 (/sys/fs/cgroup/cpu.stat)
+	data, err := os.ReadFile("/sys/fs/cgroup/cpu.stat")
+	if err == nil {
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "usage_usec") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					usec, err := strconv.ParseInt(fields[1], 10, 64)
+					if err == nil {
+						return usec * 1000, nil
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Thử đọc cgroup v1 (/sys/fs/cgroup/cpu/cpuacct.usage hoặc /sys/fs/cgroup/cpuacct/cpuacct.usage)
+	paths := []string{
+		"/sys/fs/cgroup/cpu/cpuacct.usage",
+		"/sys/fs/cgroup/cpuacct/cpuacct.usage",
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			ns, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+			if err == nil {
+				return ns, nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("cgroup cpu metrics not found")
+}
+
+type CGroupCPUSampler struct {
+	lastUsage int64
+	lastTime  time.Time
+}
+
+func (s *CGroupCPUSampler) SamplePercent() float64 {
+	now := time.Now()
+	ns, err := getCGroupCPUUsage()
+	if err != nil {
+		percentages, err := cpu.Percent(0, false)
+		if err == nil && len(percentages) > 0 {
+			return percentages[0]
+		}
+		return 0
+	}
+
+	if s.lastUsage == 0 || s.lastTime.IsZero() {
+		s.lastUsage = ns
+		s.lastTime = now
+		return 0
+	}
+
+	deltaUsage := float64(ns - s.lastUsage)
+	deltaTime := float64(now.Sub(s.lastTime).Nanoseconds())
+
+	s.lastUsage = ns
+	s.lastTime = now
+
+	if deltaTime <= 0 {
+		return 0
+	}
+
+	pct := (deltaUsage / deltaTime) * 100.0
+	if pct < 0 {
+		pct = 0
+	}
+	return pct
+}
 
 type SNssai struct {
 	SST int    `json:"sst"` // Single-Use Scenario ID - Xác định loại hình dịch vụ hoặc tập hợp các tính năng.
@@ -37,12 +116,17 @@ type CreateSessionResponse struct {
 }
 
 type MetricsResponse struct {
-	InstanceID   string `json:"instanceID"`
-	ActiveRequests int    `json:"activeRequests"`
+	InstanceID     string  `json:"instanceID"`
+	ActiveRequests int     `json:"activeRequests"`
+	PeakCPU        float64 `json:"peakCpu"`
 }
 
 // Hàm xử lý
 var mu sync.Mutex
+var (
+	peakCPU      float64
+	peakCPUMutex sync.Mutex
+)
 
 func CreateSession(
 	w http.ResponseWriter, //
@@ -122,9 +206,14 @@ func Metrics(
 	w http.ResponseWriter,
 	r *http.Request,
 ){
+	peakCPUMutex.Lock()
+	pCPU := peakCPU
+	peakCPUMutex.Unlock()
+
 	resp := MetricsResponse{
-		InstanceID: instanceID,
+		InstanceID:     instanceID,
 		ActiveRequests: int(atomic.LoadInt64(&activeRequests)),
+		PeakCPU:        pCPU,
 	}
 
 	w.Header().Set(
@@ -132,6 +221,18 @@ func Metrics(
 		"application/json",
 	)
 	json.NewEncoder(w).Encode(resp)
+}
+
+func ResetMetrics(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	peakCPUMutex.Lock()
+	peakCPU = 0
+	peakCPUMutex.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"ok"}`))
 }
 
 var instanceID string
@@ -165,6 +266,22 @@ func main() {
 		ip := getLocalIP()
 		instanceID = host + " (" + ip + ")"
 	}
+
+	// Goroutine ngầm đo % CPU của container pdu-session theo cửa sổ 1s (khớp 100% với docker stats)
+	go func() {
+		sampler := &CGroupCPUSampler{}
+		ticker := time.NewTicker(1000 * time.Millisecond)
+		for range ticker.C {
+			pct := sampler.SamplePercent()
+			if pct > 0 {
+				peakCPUMutex.Lock()
+				if pct > peakCPU {
+					peakCPU = pct
+				}
+				peakCPUMutex.Unlock()
+			}
+		}
+	}()
 
 	port := GetEnv(
 		"PORT",
@@ -212,6 +329,10 @@ func main() {
 	http.HandleFunc(
 		"/metrics",
 		Metrics,
+	)
+	http.HandleFunc(
+		"/reset-metrics",
+		ResetMetrics,
 	)
 
 	h2s := &http2.Server{}

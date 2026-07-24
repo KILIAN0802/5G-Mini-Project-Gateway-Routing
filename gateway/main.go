@@ -15,15 +15,155 @@ import (
 	// Tạo web server ( http.ListenAndServe)
 	// Gửi request HTTP (http.Get, http.Post)
 	// Xử lý request/response qua http.Handler
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"encoding/json"
 	"gateway/algorithm"
 	"gateway/handler"
 	"gateway/health"
 	"gateway/registry"
 	"time"
 
+	"github.com/shirou/gopsutil/v3/cpu"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
+
+func getCGroupCPUUsage() (int64, error) {
+	// 1. Thử đọc cgroup v2 (/sys/fs/cgroup/cpu.stat)
+	data, err := os.ReadFile("/sys/fs/cgroup/cpu.stat")
+	if err == nil {
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "usage_usec") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					usec, err := strconv.ParseInt(fields[1], 10, 64)
+					if err == nil {
+						return usec * 1000, nil
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Thử đọc cgroup v1 (/sys/fs/cgroup/cpu/cpuacct.usage hoặc /sys/fs/cgroup/cpuacct/cpuacct.usage)
+	paths := []string{
+		"/sys/fs/cgroup/cpu/cpuacct.usage",
+		"/sys/fs/cgroup/cpuacct/cpuacct.usage",
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			ns, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+			if err == nil {
+				return ns, nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("cgroup cpu metrics not found")
+}
+
+type CGroupCPUSampler struct {
+	lastUsage int64
+	lastTime  time.Time
+}
+
+func (s *CGroupCPUSampler) SamplePercent() float64 {
+	now := time.Now()
+	ns, err := getCGroupCPUUsage()
+	if err != nil {
+		percentages, err := cpu.Percent(0, false)
+		if err == nil && len(percentages) > 0 {
+			return percentages[0]
+		}
+		return 0
+	}
+
+	if s.lastUsage == 0 || s.lastTime.IsZero() {
+		s.lastUsage = ns
+		s.lastTime = now
+		return 0
+	}
+
+	deltaUsage := float64(ns - s.lastUsage)
+	deltaTime := float64(now.Sub(s.lastTime).Nanoseconds())
+
+	s.lastUsage = ns
+	s.lastTime = now
+
+	if deltaTime <= 0 {
+		return 0
+	}
+
+	pct := (deltaUsage / deltaTime) * 100.0
+	if pct < 0 {
+		pct = 0
+	}
+	return pct
+}
+
+var (
+	gwPeakCPU      float64
+	gwPeakCPUMutex sync.Mutex
+)
+
+type PduMetrics struct {
+	InstanceID     string  `json:"instanceID"`
+	ActiveRequests int     `json:"activeRequests"`
+	PeakCPU        float64 `json:"peakCpu"`
+}
+
+type ClusterMetricsResponse struct {
+	GatewayPeakCPU float64               `json:"gatewayPeakCpu"`
+	Instances      map[string]PduMetrics `json:"instances"`
+}
+
+func ClusterMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	gwPeakCPUMutex.Lock()
+	gwCPU := gwPeakCPU
+	gwPeakCPUMutex.Unlock()
+
+	res := ClusterMetricsResponse{
+		GatewayPeakCPU: gwCPU,
+		Instances:      make(map[string]PduMetrics),
+	}
+
+	healthyInsts := registry.GetHealthyInstance()
+	for _, inst := range healthyInsts {
+		resp, err := pduClient.Get("http://" + inst.Address + "/metrics")
+		if err == nil && resp.StatusCode == 200 {
+			var m PduMetrics
+			if json.NewDecoder(resp.Body).Decode(&m) == nil {
+				res.Instances[inst.Address] = m
+			}
+			resp.Body.Close()
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
+}
+
+func ResetClusterMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	gwPeakCPUMutex.Lock()
+	gwPeakCPU = 0
+	gwPeakCPUMutex.Unlock()
+
+	healthyInsts := registry.GetHealthyInstance()
+	for _, inst := range healthyInsts {
+		req, _ := http.NewRequest("POST", "http://"+inst.Address+"/reset-metrics", nil)
+		if resp, err := pduClient.Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"ok"}`))
+}
 
 // Notice
 var pduClient = &http.Client{
@@ -294,6 +434,22 @@ func main() {
 	// algorithm.SetStrategy(&algorithm.WeightedRR{})
 	// algorithm.SetStrategy(&algorithm.LoadBalancer{})
 
+	// Goroutine ngầm đo % CPU của container Gateway theo cửa sổ 1s (khớp 100% với docker stats)
+	go func() {
+		sampler := &CGroupCPUSampler{}
+		ticker := time.NewTicker(1000 * time.Millisecond)
+		for range ticker.C {
+			pct := sampler.SamplePercent()
+			if pct > 0 {
+				gwPeakCPUMutex.Lock()
+				if pct > gwPeakCPU {
+					gwPeakCPU = pct
+				}
+				gwPeakCPUMutex.Unlock()
+			}
+		}
+	}()
+
 	http.HandleFunc(
 		"/nsmf-pdusession/v1/sm-contexts",
 		ForwardToPDU,
@@ -312,6 +468,16 @@ func main() {
 	http.HandleFunc(
 		"/list-sessions",
 		ListSessionsForward,
+	)
+
+	http.HandleFunc(
+		"/cluster-metrics",
+		ClusterMetricsHandler,
+	)
+
+	http.HandleFunc(
+		"/reset-cluster-metrics",
+		ResetClusterMetricsHandler,
 	)
 
 	log.Println(
