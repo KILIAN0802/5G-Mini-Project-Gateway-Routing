@@ -4,7 +4,7 @@ import (
 	"gateway/models"
 	"gateway/registry"
 	"io"
-	"log"
+	// "log"
 	"net/http"
 	"sync"
 	"time"
@@ -39,7 +39,7 @@ func CheckInstance(
 	}
 
 	instance.Healthy.Store(healthy)
-	log.Printf("%s healthy=%v", instance.ID, healthy)
+	// log.Printf("%s healthy=%v", instance.ID, healthy)
 }
 
 

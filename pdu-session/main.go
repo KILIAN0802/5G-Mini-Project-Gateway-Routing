@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -37,7 +39,7 @@ type CreateSessionResponse struct {
 }
 
 type MetricsResponse struct {
-	InstanceID   string `json:"instanceID"`
+	InstanceID     string `json:"instanceID"`
 	ActiveRequests int    `json:"activeRequests"`
 }
 
@@ -50,7 +52,7 @@ func CreateSession(
 ) {
 	IncrementActiveRequest()
 	defer DecrementActiveRequest()
-	
+
 	// delayMode := GetEnv("DELAY_MODE", "fixed")
 	// var delayDuration time.Duration
 
@@ -65,19 +67,16 @@ func CreateSession(
 
 	// log.Printf("[%s] Bat dau xu ly session, sleep %v", instanceID, delayDuration)
 	// time.Sleep(delayDuration)
-	var req CreateSessionRequest
-
-	err := json.NewDecoder(
-		r.Body,
-	).Decode(&req)
-
+	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(
-			w,
-			"bad request",         // Response message -> Ghi vào r.Body
-			400, // 400 = Bad Request
-		)
-		return // Trả về r.Body và dừng hàm
+		http.Error(w, "bad request", 400)
+		return
+	}
+
+	var req CreateSessionRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		http.Error(w, "bad request", 400)
+		return
 	}
 
 	resp := CreateSessionResponse{
@@ -87,29 +86,15 @@ func CreateSession(
 		Supi:         req.Supi,
 	}
 
-	w.Header().Set(
-		"Content-Type",
-		"application/json",
-	) // Thiết lập HTTP header cho response
-	// w.WriteHeader(200)// 200 OK
-	// --- TẠM TẮT LƯU DATABASE REDIS ---
-	// reqJSON, errSave := json.Marshal(req)
-	// if errSave == nil {
-	// 	go func() {
-	// 		errRedis := SaveSessionInRedis(req.Supi, string(reqJSON))
-	// 		if errRedis != nil {
-	// 			log.Printf("[%s] Lưu session vào Redis thất bại: %v", instanceID, errRedis)
-	// 		}
-	// 	}()
-	// } else {
-	// 	log.Printf("[%s] Chuyển request thành JSON thất bại: %v", instanceID, errSave)
-	// }
-	// ------------------------------------
-	json.NewEncoder(w).Encode(resp)
+	respBytes, err := json.Marshal(resp)
+	if err != nil {
+		http.Error(w, "internal server error", 500)
+		return
+	}
 
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(respBytes)
 }
-
-
 
 func HealthCheck(
 	w http.ResponseWriter,
@@ -123,9 +108,9 @@ func HealthCheck(
 func Metrics(
 	w http.ResponseWriter,
 	r *http.Request,
-){
+) {
 	resp := MetricsResponse{
-		InstanceID: instanceID,
+		InstanceID:     instanceID,
 		ActiveRequests: int(atomic.LoadInt64(&activeRequests)),
 	}
 
@@ -184,20 +169,20 @@ func main() {
 
 	http.HandleFunc(
 		"/list-sessions",
-		func(w http.ResponseWriter, r *http.Request){
-			log.Printf("[%s] API list-sessions duoc goi", instanceID)
+		func(w http.ResponseWriter, r *http.Request) {
+			// log.Printf("[%s] API list-sessions duoc goi", instanceID)
 			data, err := GetAllSessionsFromRedis()
 			if err != nil {
 				log.Printf("[%s] Loi doc tu Redis: %v", instanceID, err)
 				http.Error(w, "Redis read error: "+err.Error(), 500)
 				return
 			}
-			parsedSessions := make(map[string] interface{})
+			parsedSessions := make(map[string]interface{})
 			for supi, rawJSON := range data {
 				var val interface{}
 				if err := json.Unmarshal([]byte(rawJSON), &val); err == nil {
 					parsedSessions[supi] = val
-				}else {
+				} else {
 					parsedSessions[supi] = rawJSON
 				}
 			}
@@ -220,9 +205,9 @@ func main() {
 	h2cHandler := h2c.NewHandler(http.DefaultServeMux, h2s)
 
 	server := &http.Server{
-		Addr: ":" + port,
-		Handler: h2cHandler,
-		IdleTimeout: 10 * time.Second, 
+		Addr:        ":" + port,
+		Handler:     h2cHandler,
+		IdleTimeout: 10 * time.Second,
 	}
 
 	if err := server.ListenAndServe(); err != nil {

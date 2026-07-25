@@ -1,15 +1,16 @@
 package main
 
 import (
-	"bytes" // Cung cấp các hàm để thao tác với kiểu dữ liệu byte -> Thường dùng để tạo buffer cho việc đọc / ghi dữ liệu
+	// "bytes" // Cung cấp các hàm để thao tác với kiểu dữ liệu byte -> Thường dùng để tạo buffer cho việc đọc / ghi dữ liệu
 	"context"
 	"crypto/tls"
+	// "encoding/json"
 	"io" // Cung cấp các interface chuẩn để đọc/ghi dữ liệu
 	"log"
 	"net"
 	"net/http"
 	"sync"
-	"sync/atomic"
+	// "sync/atomic"
 
 	// Cho phép:
 	// Tạo web server ( http.ListenAndServe)
@@ -19,21 +20,41 @@ import (
 	"gateway/handler"
 	"gateway/health"
 	"gateway/registry"
+	// "strconv"
 	"time"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
 
-// Notice
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 4096)
+		return &b
+	},
+}
+
 var pduClient = &http.Client{
 	Timeout: 90 * time.Second,
 	Transport: &http2.Transport{
 		AllowHTTP: true,
 		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, network, addr)
+			dialer := &net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 60 * time.Second,
+			}
+			conn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			if tcpConn, ok := conn.(*net.TCPConn); ok {
+				_ = tcpConn.SetNoDelay(true)
+			}
+			return conn, nil
 		},
+		StrictMaxConcurrentStreams: false,
+		ReadIdleTimeout:            30 * time.Second,
+		PingTimeout:                15 * time.Second,
 	},
 }
 
@@ -41,77 +62,30 @@ func ForwardToPDU(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	bodyBytes, err :=
-		io.ReadAll(r.Body)
-
-	if err != nil {
-		http.Error(
-			w,
-			"Can not read body",
-			500,
-		)
-		return
-	}
 	selected := algorithm.SelectBackend(registry.GetHealthyInstance())
 	if selected == nil {
-		http.Error(
-			w,
-			"NO_BACKEND_AVAILABLE",
-			503,
-		)
+		http.Error(w, "NO_BACKEND_AVAILABLE", 500)
 		return
 	}
 
-	isLB := algorithm.IsLoadBalancer()
-	if isLB {
-		atomic.AddInt32(&selected.ActiveRequest, 1)
-	}
-	defer func() {
-		if isLB {
-			atomic.AddInt32(&selected.ActiveRequest, -1)
-		}
-	}()
-
-	log.Printf(
-		"Gateway route to %s",
-		selected.ID,
-	)
-
-	req, err :=
-		http.NewRequest(
-			"POST",
-			"http://"+selected.Address+"/create-session",
-			bytes.NewBuffer(bodyBytes),
-		)
+	req, err := http.NewRequestWithContext(r.Context(), "POST", "http://"+selected.Address+"/create-session", r.Body)
 	if err != nil {
-		http.Error(
-			w,
-			"Error creating request",
-			500,
-		)
+		http.Error(w, "Error creating request", 500)
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+
 	resp, err := pduClient.Do(req)
 	if err != nil {
-		http.Error(
-			w,
-			"Backend Error",
-			500,
-		)
+		log.Printf("ForwardToPDU error forwarding to %s: %v", selected.Address, err)
+		http.Error(w, "Backend Error: "+err.Error(), 500)
 		return
 	}
-
 	defer resp.Body.Close()
 
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		http.Error(w, "Error forwarding response", 500)
-		log.Printf(
-			"Error forwarding response: %v",
-			err,
-		)
-		return
-	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 func ListSessionsForward(w http.ResponseWriter, r *http.Request) {
@@ -349,14 +323,18 @@ func main() {
 	}
 	// LimitListener giới hạn số lượng kết nối đồng thời
 	// limitedListener := LimitListener(listener, 20)
-	// Rate Limiter
-	limiter := NewRateLimiter(20000, 10000)
-	// Request Queue với Buffered Channels: max 1000 active workers, max 2000 waiting queue slots
-	reqQueue := NewRequestQueue(10000, 50000, limiter)
-	h2s := &http2.Server{}
+	// Rate Limiter & Request Queue (Tạm tắt để bypass điểm nghẽn Mutex/Channel khi test TPS tối đa)
+	// limiter := NewRateLimiter(200000, 1000000)
+	// reqQueue := NewRequestQueue(100000, 500000, limiter)
+	h2s := &http2.Server{
+		MaxConcurrentStreams: 10000,
+		MaxReadFrameSize:     1048576,
+		IdleTimeout:          120 * time.Second,
+	}
 	server := &http.Server{
-		Handler:      h2c.NewHandler(reqQueue, h2s),
-		IdleTimeout:  60 * time.Second,
+		Addr:         ":8080",
+		Handler:      h2c.NewHandler(http.DefaultServeMux, h2s),
+		IdleTimeout:  120 * time.Second,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}
