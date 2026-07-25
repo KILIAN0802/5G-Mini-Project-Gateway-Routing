@@ -1,18 +1,18 @@
 package main
 
 import (
-	"log"
+	// "log"
 	"sync/atomic"
 )
 
 func IncrementActiveRequest(){
-	newVal := atomic.AddInt64(&activeRequests, 1)
-	log.Printf("active=%d", newVal)
+	atomic.AddInt64(&activeRequests, 1)
+	// log.Printf("active=%d", newVal)
 }
 
 func DecrementActiveRequest(){
-	newVal := atomic.AddInt64(&activeRequests, -1)
-	log.Printf("active=%d", newVal)
+	atomic.AddInt64(&activeRequests, -1)
+	// log.Printf("active=%d", newVal)
 }
 
 func GetActiveRequests() int64 {

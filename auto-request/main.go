@@ -161,7 +161,7 @@ func runBenchmark(clients []*http.Client, TotalRequests int, concurrency int) {
 	log.Printf("Thời gian chạy: %s", duration)
 	log.Printf("Tổng số Request gửi đi: %d", TotalRequests)
 	log.Printf("Thành công: %d", success)
-	log.Printf("Thất bại (lỗi kết nối/timeout/sai luồng): %d", atomic.LoadInt64(&failCount))
+	log.Printf("Thất bại: %d", atomic.LoadInt64(&failCount))
 	log.Printf("TPS gửi đi: %.2f req/s", tpsSend)
 	log.Printf("TPS thành công: %.2f req/s", tpsSuccess)
 

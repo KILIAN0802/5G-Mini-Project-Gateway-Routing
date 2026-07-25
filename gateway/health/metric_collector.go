@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"gateway/models"
 	"gateway/registry"
-	"log"
+	// "log"
 	"net/http"
 	// net: định nghĩa các kiểu dữ liệu về internet như địa chỉ ip, ...
 	// net/http: định nghĩa các phương thức http như GET, POST, PUT, DELETE
@@ -28,11 +28,11 @@ func UpdateMetrics(
 	resp, err := metricClient.Get(
 		"http://"+instance.Address+"/metrics",
 	)
-	log.Printf(
-		"%s active=%d",
-		instance.ID,
-		atomic.LoadInt32(&instance.ActiveRequest),
-	)
+	// log.Printf(
+	// 	"%s active=%d",
+	// 	instance.ID,
+	// 	atomic.LoadInt32(&instance.ActiveRequest),
+	// )
 
 	if err != nil {
 		return
