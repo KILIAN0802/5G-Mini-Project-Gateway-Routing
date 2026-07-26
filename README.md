@@ -94,3 +94,35 @@ Chương trình tương tác qua dòng lệnh và sẽ lần lượt yêu cầu 
 #### Thao tác điều khiển:
 * Nhập `exit` hoặc `quit` tại màn hình nhắc lệnh để thoát chương trình.
 * Nhấn phím **ESC** bất cứ lúc nào để dừng khẩn cấp vòng lặp hoặc tiến trình bắn tải một cách an toàn.
+
+---
+
+## 4. KẾT QUẢ KIỂM THỬ TẢI THỰC TẾ (BENCHMARK RESULT)
+
+Kết quả kiểm thử tối ưu đạt được trên cụm hệ thống (4 HTTP/2 Connections, 60 Workers song song, 4 Instances PDU Session):
+
+```text
+=== CẤU HÌNH KIỂM THỬ ===
+- Số lượng Request: 8,000
+- Số lượng Connections: 4
+- Số lượng Worker song song: 60
+
+=== KẾT QUẢ TEST TẢI ĐỒNG THỜI ===
+Thời gian chạy: 540.58ms (0.54s)
+Tổng số Request gửi đi: 8,000
+Thành công: 8,000 (100%)
+Thất bại: 0 (0%)
+TPS gửi đi: 14,798.85 req/s
+TPS thành công: 14,798.85 req/s
+
+=== PHÂN PHỐI TẢI TRÊN CÁC INSTANCES ===
+Instance pdu-session-1 xử lý: 2,000 requests (25.00%)
+Instance pdu-session-2 xử lý: 2,000 requests (25.00%)
+Instance pdu-session-3 xử lý: 2,000 requests (25.00%)
+Instance pdu-session-4 xử lý: 2,000 requests (25.00%)
+```
+
+> [!NOTE]
+> Kết quả có thể bị ảnh hưởng bởi tài nguyên CPU, RAM nên có thể không giống nhau ở các lần chạy, sai lệch có thể từ 10-20%.
+> 
+
