@@ -14,20 +14,6 @@ services:
       - pdu-session-3
       - pdu-session-4
 
-  redis:
-    image: redis:alpine
-    ports:
-      - "6379:6379"
-
-  redis-commander:
-    image: rediscommander/redis-commander
-    environment:
-      - REDIS_HOSTS=redis:redis:6379
-    ports:
-      - "8081:8081"
-    depends_on:
-      - redis
-
   # Instance PDU Session 1
   pdu-session-1:
     build:
@@ -35,13 +21,10 @@ services:
     environment:
       - INSTANCE_ID=pdu-session-1
       - PORT=9001
-      - REDIS_ADDR=redis:6379
     networks:
       default:
         aliases:
           - pdu-session
-    depends_on:
-      - redis
 
   # Instance PDU Session 2
   pdu-session-2:
@@ -50,13 +33,10 @@ services:
     environment:
       - INSTANCE_ID=pdu-session-2
       - PORT=9001
-      - REDIS_ADDR=redis:6379
     networks:
       default:
         aliases:
           - pdu-session
-    depends_on:
-      - redis
 
   # Instance PDU Session 3
   pdu-session-3:
@@ -65,13 +45,10 @@ services:
     environment:
       - INSTANCE_ID=pdu-session-3
       - PORT=9001
-      - REDIS_ADDR=redis:6379
     networks:
       default:
         aliases:
           - pdu-session
-    depends_on:
-      - redis
 
   # Instance PDU Session 4
   pdu-session-4:
@@ -80,13 +57,10 @@ services:
     environment:
       - INSTANCE_ID=pdu-session-4
       - PORT=9001
-      - REDIS_ADDR=redis:6379
     networks:
       default:
         aliases:
           - pdu-session
-    depends_on:
-      - redis
 
   auto-request:
     build:

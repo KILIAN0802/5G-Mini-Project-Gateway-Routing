@@ -26,7 +26,7 @@ sequenceDiagram
     Note over GW: Chọn backend tối ưu dựa trên:<br/>RoundRobin / WeightedRR / LeastConnection
     
     GW->>PDU1: Chuyển tiếp gói tin (HTTP POST /create-session)
-    Note over PDU1: Xử lý tạo session &<br/>Lưu thông tin vào Redis
+    Note over PDU1: Xử lý tạo session &<br/>Trả về kết quả
     
     PDU1-->>GW: Trả về kết quả JSON (Active Session)
     GW-->>Client: Trả về kết quả cuối cùng cho Client
@@ -58,7 +58,7 @@ Công cụ kiểm thử hiệu năng (Benchmark Tool) viết bằng Go, tối ư
 ## 3. HƯỚNG DẪN CẤU HÌNH HỆ THỐNG
 
 ### 3.1 Cấu hình tài nguyên & Biến môi trường (Docker Compose)
-Tệp cấu hình `docker-compose.yml` khai báo các dịch vụ gồm Gateway (gán CPU core 0, GOGC=500), Redis, Redis Commander, 4 instance PDU Session và Auto-Request Client:
+Tệp cấu hình `docker-compose.yml` khai báo các dịch vụ gồm Gateway (gán CPU core 0, GOGC=500), 4 instance PDU Session và Auto-Request Client:
 
 ```yaml
 services:
@@ -77,20 +77,6 @@ services:
       - pdu-session-3
       - pdu-session-4
 
-  redis:
-    image: redis:alpine
-    ports:
-      - "6379:6379"
-
-  redis-commander:
-    image: rediscommander/redis-commander
-    environment:
-      - REDIS_HOSTS=redis:redis:6379
-    ports:
-      - "8081:8081"
-    depends_on:
-      - redis
-
   # Cụm các instance PDU Session (pdu-session-1 đến pdu-session-4)
   pdu-session-1:
     build:
@@ -98,13 +84,10 @@ services:
     environment:
       - INSTANCE_ID=pdu-session-1
       - PORT=9001
-      - REDIS_ADDR=redis:6379
     networks:
       default:
         aliases:
           - pdu-session
-    depends_on:
-      - redis
 
   # (pdu-session-2, pdu-session-3, pdu-session-4 được định nghĩa tương tự)
 
