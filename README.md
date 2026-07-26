@@ -55,75 +55,9 @@ Công cụ kiểm thử hiệu năng (Benchmark Tool) viết bằng Go, tối ư
 * **Cơ chế Concurrency Control**: Sử dụng mô hình Worker Pool (giới hạn tối đa 500 luồng chạy song song) để đẩy tải cực hạn lên Gateway mà không làm sập bộ nhớ máy client.
 ---
 
-## 3. HƯỚNG DẪN CẤU HÌNH HỆ THỐNG
 
-### 3.1 Cấu hình tài nguyên & Biến môi trường (Docker Compose)
-Tệp cấu hình `docker-compose.yml` khai báo các dịch vụ gồm Gateway (gán CPU core 0, GOGC=500), 4 instance PDU Session và Auto-Request Client:
 
-```yaml
-services:
-  # Container của gateway - gán cứng vào CPU Core 0
-  gateway:
-    build:
-      context: ./gateway
-    ports:
-      - "8080:8080"
-    cpuset: "0"
-    environment:
-      - GOGC=500
-    depends_on:
-      - pdu-session-1
-      - pdu-session-2
-      - pdu-session-3
-      - pdu-session-4
-
-  # Cụm các instance PDU Session (pdu-session-1 đến pdu-session-4)
-  pdu-session-1:
-    build:
-      context: ./pdu-session
-    environment:
-      - INSTANCE_ID=pdu-session-1
-      - PORT=9001
-    networks:
-      default:
-        aliases:
-          - pdu-session
-
-  # (pdu-session-2, pdu-session-3, pdu-session-4 được định nghĩa tương tự)
-
-  auto-request:
-    build:
-      context: ./auto-request
-    environment:
-      - TARGET_URL=http://gateway:8080/nsmf-pdusession/v1/sm-contexts
-    depends_on:
-      - gateway
-```
-
-### 3.2 Cấu hình đồng bộ Timeout trong Code
-Để đảm bảo hệ thống không gặp lỗi `Gateway Timeout` hoặc `Client Timeout` khi xử lý dưới tải nặng, các mốc Timeout trong mã nguồn Go được đồng bộ lên **90 giây**:
-
-* **Trong Gateway** (`gateway/main.go`):
-  Khởi tạo `Timeout: 90 * time.Second` cho HTTP/2 Client pool dùng để gửi request chuyển tiếp (forward) tới các instance PDU Session:
-  ```go
-  pduClientPool[i] = &http.Client{
-      Timeout: 90 * time.Second, // Đảm bảo đủ thời gian chờ PDU Session xử lý và phản hồi
-      Transport: &http2.Transport{ ... },
-  }
-  ```
-
-* **Trong Auto-Request Client** (`auto-request/main.go`):
-  Cấu hình `ClientTimeout: 90 * time.Second` cho HTTP Client bắn tải tới Gateway:
-  ```go
-  var config = Config{
-      targetURL:     "http://127.0.0.1:8080/nsmf-pdusession/v1/sm-contexts",
-      ClientTimeout: 90 * time.Second, // Tránh Client ngắt kết nối sớm khi hệ thống chịu tải cao
-  }
-  ```
-
----
-
-## 4. QUY TRÌNH VẬN HÀNH & KIỂM THỬ
+## 3. QUY TRÌNH VẬN HÀNH & KIỂM THỬ
 
 ### Bước 1: Khởi động và Cấu hình Tỷ lệ (Scaling) hệ thống
 * Khởi động mặc định (4 replicas):
