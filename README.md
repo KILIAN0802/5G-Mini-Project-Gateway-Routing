@@ -49,18 +49,10 @@ Gateway đóng vai trò là điểm tiếp nhận duy nhất (Single Point of En
   * **Weighted Round Robin (WRR)**: Phân phối yêu cầu dựa theo trọng số sức mạnh cấu hình trước của từng instance (ví dụ: máy mạnh gánh nhiều tải hơn).
   * **Least Connections (Load Balancer)**: Định tuyến gói tin mới vào instance có số lượng request đang xử lý (`ActiveRequests`) thấp nhất tại thời điểm đó (được thu thập qua API `/metrics`).
 
-### 2.2 Đơn Vị Xử Lý Phiên Kết Nối (PDU Session)
-Mô phỏng chức năng Session Management Function (SMF) trong mạng 5G.
-* **Scale-out**: Được cấu hình chạy song song **4 bản sao (Replicas)** độc lập trong file Docker Compose.
-* **Kiểm soát thời gian xử lý (Delay Simulation)**:
-  * **Chế độ trễ cố định**: Luôn mất đúng 15 giây để xử lý xong một gói tin.
-  * **Chế độ trễ ngẫu nhiên**: Sử dụng hàm sinh số ngẫu nhiên modulo 20 (`rand.Intn(20)`) để tạo độ trễ biến thiên từ `0` đến `19` giây trên mỗi gói tin, giúp giả lập môi trường mạng thực tế có độ trễ bất định.
 
-### 2.3 Công Cụ Bắn Tải Tự Động (Auto-Request)
+### 2.2 Công Cụ Bắn Tải Tự Động (Auto-Request)
 Công cụ kiểm thử hiệu năng (Benchmark Tool) viết bằng Go, tối ưu hóa concurrency qua Goroutines và Channels.
 * **Cơ chế Concurrency Control**: Sử dụng mô hình Worker Pool (giới hạn tối đa 500 luồng chạy song song) để đẩy tải cực hạn lên Gateway mà không làm sập bộ nhớ máy client.
-* **Hủy khẩn cấp bằng phím ESC**: Tích hợp DLL `msvcrt.dll` trên Windows để bắt sự kiện phím bấm thời gian thực không chặn. Khi người dùng nhấn phím ESC, chương trình lập tức nhận diện và dừng vòng lặp bắn tải một cách an toàn.
-
 ---
 
 ## 3. HƯỚNG DẪN CẤU HÌNH HỆ THỐNG
@@ -93,21 +85,25 @@ services:
         limits:
           cpus: "0.65" # Giới hạn mỗi instance PDU chỉ được dùng tối đa 65% của 1 CPU Core
 ```
-
 ### 3.2 Cấu hình đồng bộ Timeout trong Code
-Khi tăng thời gian xử lý gói tin (ví dụ: tối đa 19 giây ở chế độ random), các thông số Timeout trong code Go bắt buộc phải lớn hơn để tránh lỗi `Gateway Timeout`:
+Để đảm bảo hệ thống không gặp lỗi `Gateway Timeout` hoặc `Client Timeout` khi xử lý dưới tải nặng hoặc khi `pdu-session` có độ trễ lớn (ví dụ: chế độ trễ ngẫu nhiên ngẫu nhiên tối đa 19s), các mốc Timeout trong mã nguồn Go được đồng bộ lên **90 giây**:
 
-* **Trong Gateway** ([gateway/main.go]:
+* **Trong Gateway** (`gateway/main.go`):
+  Khởi tạo `Timeout: 90 * time.Second` cho HTTP/2 Client pool dùng để gửi request chuyển tiếp (forward) tới các instance PDU Session:
   ```go
-  var pduClient = &http.Client{
-      Timeout: 30 * time.Second, // Đảm bảo lớn hơn thời gian xử lý tối đa của PDU Session (19s)
-  ...
+  pduClientPool[i] = &http.Client{
+      Timeout: 90 * time.Second, // Đảm bảo đủ thời gian chờ PDU Session xử lý và phản hồi
+      Transport: &http2.Transport{ ... },
+  }
   ```
-* **Trong Client** ([auto-request/main.go]):
+
+* **Trong Auto-Request Client** (`auto-request/main.go`):
+  Cấu hình `ClientTimeout: 90 * time.Second` cho HTTP Client bắn tải tới Gateway:
   ```go
   var config = Config{
-      ClientTimeout:  30 * time.Second, // Timeout cho các kết nối HTTP Client gửi tới Gateway
-  ...
+      targetURL:     "http://127.0.0.1:8080/nsmf-pdusession/v1/sm-contexts",
+      ClientTimeout: 90 * time.Second, // Tránh Client ngắt kết nối sớm khi hệ thống chịu tải cao
+  }
   ```
 
 ---
@@ -126,44 +122,26 @@ Khi tăng thời gian xử lý gói tin (ví dụ: tối đa 19 giây ở chế 
   ```
   *(Gateway sẽ tự động phát hiện số lượng instance thay đổi và cập nhật lại bộ cân bằng tải trong vòng 10 giây)*
 
-### Bước 2: Theo dõi hiệu năng thời gian thực (Giới hạn CPU)
-Mở một terminal và gõ lệnh sau để xem mức độ sử dụng CPU có bị giới hạn dưới 65% dưới tải nặng hay không:
-```bash
-docker stats
-```
+### Bước 2: Thực hiện kiểm thử chạy tải (Benchmark)
+Khởi chạy công cụ bắn tải `auto-request` (bằng Docker Compose hoặc chạy trực tiếp bằng Go):
 
-### Bước 3: Thực hiện chạy tải
-Chạy tool `auto-request`:
-```bash
-go run .
-```
-1. Chọn chế độ tự động bắn theo chu kỳ (mỗi 5-7 giây bắn 500 requests) để kiểm tra độ ổn định lâu dài của Gateway.
-2. Chọn chế độ bắn thủ công để kiểm tra sức chịu tải tức thời của hệ thống với số lượng request lớn tùy chọn.
-3. Nhấn **ESC** bất cứ lúc nào để dừng chương trình kiểm thử.
+* **Cách 1: Chạy qua Docker Compose (Khuyên dùng)**
+  ```bash
+  docker compose run --rm auto-request
+  ```
 
-### Bước 4: Kiểm tra dữ liệu Session Context trong Database (Redis)
-Bạn có thể theo dõi và thống kê dữ liệu session context đã được tạo thành công bằng 3 cách:
+* **Cách 2: Chạy trực tiếp trên máy vật lý**
+  ```bash
+  cd auto-request
+  go run .
+  ```
 
-#### **Cách 1: Sử dụng Giao diện Web (Redis Commander)**
-1. Mở trình duyệt và truy cập: **`http://localhost:8081`**
-2. Ở danh sách bên trái, click vào nút mũi tên (hình tam giác) để mở rộng kết nối **`redis (redis:6379:0)`**.
-3. Click tiếp vào nút mũi tên bên cạnh thư mục **`session:* (500)`** để mở rộng và xem danh sách toàn bộ các session keys.
-4. Chọn một key con bất kỳ (ví dụ: `session:imsi-...`) để xem chi tiết dữ liệu JSON của phiên kết nối ở khung bên phải.
+#### Các bước thiết lập tham số kiểm thử:
+Chương trình tương tác qua dòng lệnh và sẽ lần lượt yêu cầu nhập các tham số:
+1. **Nhập số lượng request**: Tổng số gói tin cần gửi đi (ví dụ: `5000`).
+2. **Nhập số lượng connection**: Số lượng kết nối HTTP/2 multiplexing song song tới Gateway (mặc định `1`).
+3. **Nhập số lượng Worker song song**: Số lượng luồng Worker xử lý đồng thời (mặc định `100`).
 
-#### **Cách 2: Sử dụng API của Gateway**
-Gửi yêu cầu HTTP GET tới Gateway để lấy danh sách toàn bộ các session lưu trữ trong database:
-```bash
-curl.exe http://localhost:8080/list-sessions
-```
-
-#### **Cách 3: Sử dụng dòng lệnh trực tiếp (Redis CLI)**
-1. Vào container chứa Redis:
-   ```bash
-   docker compose exec redis redis-cli
-   ```
-2. Gõ các lệnh tương tác:
-   * `DBSIZE`: Xem tổng số lượng session.
-   * `KEYS *`: Liệt kê tất cả các keys.
-   * `GET session:<supi>`: Xem dữ liệu chi tiết của thuê bao cụ thể.
-   * `exit`: Thoát ra ngoài.
-
+#### Thao tác điều khiển:
+* Nhập `exit` hoặc `quit` tại màn hình nhắc lệnh để thoát chương trình.
+* Nhấn phím **ESC** bất cứ lúc nào để dừng khẩn cấp vòng lặp hoặc tiến trình bắn tải một cách an toàn.
