@@ -26,7 +26,7 @@ sequenceDiagram
     Note over GW: Chọn backend tối ưu dựa trên:<br/>RoundRobin / WeightedRR / LeastConnection
     
     GW->>PDU1: Chuyển tiếp gói tin (HTTP POST /create-session)
-    Note over PDU1: Sleep ngẫu nhiên (mod 20s)<br/>hoặc cố định 15s (DELAY_MODE)
+    Note over PDU1: Xử lý tạo session &<br/>Lưu thông tin vào Redis
     
     PDU1-->>GW: Trả về kết quả JSON (Active Session)
     GW-->>Client: Trả về kết quả cuối cùng cho Client
@@ -58,35 +58,67 @@ Công cụ kiểm thử hiệu năng (Benchmark Tool) viết bằng Go, tối ư
 ## 3. HƯỚNG DẪN CẤU HÌNH HỆ THỐNG
 
 ### 3.1 Cấu hình tài nguyên & Biến môi trường (Docker Compose)
-Tệp cấu hình docker-compose.yml cho phép điều chỉnh các tham số vận hành chính:
+Tệp cấu hình `docker-compose.yml` khai báo các dịch vụ gồm Gateway (gán CPU core 0, GOGC=500), Redis, Redis Commander, 4 instance PDU Session và Auto-Request Client:
 
 ```yaml
 services:
+  # Container của gateway - gán cứng vào CPU Core 0
   gateway:
     build:
       context: ./gateway
     ports:
-      - "8080:8080" # Map cổng 8080 ra ngoài máy vật lý
-    deploy:
-      resources:
-        limits:
-          cpus: "0.65" # Giới hạn Gateway chỉ được dùng tối đa 65% của 1 CPU Core
+      - "8080:8080"
+    cpuset: "0"
+    environment:
+      - GOGC=500
+    depends_on:
+      - pdu-session-1
+      - pdu-session-2
+      - pdu-session-3
+      - pdu-session-4
 
-  pdu-session:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  redis-commander:
+    image: rediscommander/redis-commander
+    environment:
+      - REDIS_HOSTS=redis:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+
+  # Cụm các instance PDU Session (pdu-session-1 đến pdu-session-4)
+  pdu-session-1:
     build:
       context: ./pdu-session
     environment:
-      - INSTANCE_ID=
+      - INSTANCE_ID=pdu-session-1
       - PORT=9001
-      - DELAY_MODE=random # Chế độ trễ: điền "fixed" (cố định 15s) hoặc "random" (ngẫu nhiên mod 20s)
-    deploy:
-      replicas: 4 # Số lượng instance chạy song song (mặc định 4)
-      resources:
-        limits:
-          cpus: "0.65" # Giới hạn mỗi instance PDU chỉ được dùng tối đa 65% của 1 CPU Core
+      - REDIS_ADDR=redis:6379
+    networks:
+      default:
+        aliases:
+          - pdu-session
+    depends_on:
+      - redis
+
+  # (pdu-session-2, pdu-session-3, pdu-session-4 được định nghĩa tương tự)
+
+  auto-request:
+    build:
+      context: ./auto-request
+    environment:
+      - TARGET_URL=http://gateway:8080/nsmf-pdusession/v1/sm-contexts
+    depends_on:
+      - gateway
 ```
+
 ### 3.2 Cấu hình đồng bộ Timeout trong Code
-Để đảm bảo hệ thống không gặp lỗi `Gateway Timeout` hoặc `Client Timeout` khi xử lý dưới tải nặng hoặc khi `pdu-session` có độ trễ lớn (ví dụ: chế độ trễ ngẫu nhiên ngẫu nhiên tối đa 19s), các mốc Timeout trong mã nguồn Go được đồng bộ lên **90 giây**:
+Để đảm bảo hệ thống không gặp lỗi `Gateway Timeout` hoặc `Client Timeout` khi xử lý dưới tải nặng, các mốc Timeout trong mã nguồn Go được đồng bộ lên **90 giây**:
 
 * **Trong Gateway** (`gateway/main.go`):
   Khởi tạo `Timeout: 90 * time.Second` cho HTTP/2 Client pool dùng để gửi request chuyển tiếp (forward) tới các instance PDU Session:
