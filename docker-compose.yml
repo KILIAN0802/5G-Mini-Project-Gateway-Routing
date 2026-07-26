@@ -1,24 +1,24 @@
 version: "3.8"
 
 services:
-  #Container của gateway
+  # Container của gateway - gán cứng vào CPU Core 0
   gateway:
     build:
       context: ./gateway
     ports:
       - "8080:8080"
-    deploy:
-      resources:
-        limits:
-          cpus: "0.65"
+    cpuset: "0"
     depends_on:
-      - pdu-session
+      - pdu-session-1
+      - pdu-session-2
+      - pdu-session-3
+      - pdu-session-4
 
-  # Service is 
   redis:
     image: redis:alpine
     ports:
       - "6379:6379"
+
   redis-commander:
     image: rediscommander/redis-commander
     environment:
@@ -27,20 +27,68 @@ services:
       - "8081:8081"
     depends_on:
       - redis
-    
-  pdu-session:
+
+  # Instance PDU Session 1 - gán cứng vào CPU Core 1
+  pdu-session-1:
     build:
       context: ./pdu-session
+    cpuset: "1"
     environment:
-      - INSTANCE_ID=
-      - PORT=9001 # Mỗi container sẽ có 1 IP riêng -> có port riêng
-      # - DELAY_MODE=random # Chế độ trễ: "fixed" hoặc "random"
+      - INSTANCE_ID=pdu-session-1
+      - PORT=9001
       - REDIS_ADDR=redis:6379
-    deploy:
-      replicas: 4
-      resources:
-        limits:
-          cpus: "0.65"
+    networks:
+      default:
+        aliases:
+          - pdu-session
+    depends_on:
+      - redis
+
+  # Instance PDU Session 2 - gán cứng vào CPU Core 2
+  pdu-session-2:
+    build:
+      context: ./pdu-session
+    cpuset: "2"
+    environment:
+      - INSTANCE_ID=pdu-session-2
+      - PORT=9001
+      - REDIS_ADDR=redis:6379
+    networks:
+      default:
+        aliases:
+          - pdu-session
+    depends_on:
+      - redis
+
+  # Instance PDU Session 3 - gán cứng vào CPU Core 3
+  pdu-session-3:
+    build:
+      context: ./pdu-session
+    cpuset: "3"
+    environment:
+      - INSTANCE_ID=pdu-session-3
+      - PORT=9001
+      - REDIS_ADDR=redis:6379
+    networks:
+      default:
+        aliases:
+          - pdu-session
+    depends_on:
+      - redis
+
+  # Instance PDU Session 4 - gán cứng vào CPU Core 4
+  pdu-session-4:
+    build:
+      context: ./pdu-session
+    cpuset: "4"
+    environment:
+      - INSTANCE_ID=pdu-session-4
+      - PORT=9001
+      - REDIS_ADDR=redis:6379
+    networks:
+      default:
+        aliases:
+          - pdu-session
     depends_on:
       - redis
 
@@ -51,9 +99,3 @@ services:
       - TARGET_URL=http://gateway:8080/nsmf-pdusession/v1/sm-contexts
     depends_on:
       - gateway
-
-
-    
-  
-
-  
