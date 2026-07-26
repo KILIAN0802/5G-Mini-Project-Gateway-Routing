@@ -34,7 +34,7 @@ var bufferPool = sync.Pool{
 	},
 }
 
-const clientPoolSize = 16
+const clientPoolSize = 32
 
 var (
 	pduClientPool []*http.Client
@@ -87,12 +87,25 @@ func ForwardToPDU(
 		return
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), "POST", "http://"+selected.Address+"/create-session", r.Body)
-	if err != nil {
-		http.Error(w, "Error creating request", 500)
-		return
+	var req *http.Request
+	if selected.TargetURL != nil {
+		req = &http.Request{
+			Method:        "POST",
+			URL:           selected.TargetURL,
+			Header:        r.Header,
+			Body:          r.Body,
+			Host:          selected.Address,
+			ContentLength: r.ContentLength,
+		}
+	} else {
+		var err error
+		req, err = http.NewRequestWithContext(r.Context(), "POST", "http://"+selected.Address+"/create-session", r.Body)
+		if err != nil {
+			http.Error(w, "Error creating request", 500)
+			return
+		}
+		req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
 	}
-	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
 
 	resp, err := getPDUClient().Do(req)
 	if err != nil {

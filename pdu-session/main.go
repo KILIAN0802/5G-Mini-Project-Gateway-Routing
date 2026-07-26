@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,15 +73,17 @@ func CreateSession(
 		return
 	}
 
-	resp := CreateSessionResponse{
-		Handleby:     instanceID,
-		Status:       "Active",
-		PduSessionId: req.PduSessionId,
-		Supi:         req.Supi,
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	var buf [256]byte
+	b := buf[:0]
+	b = append(b, `{"handleby":"`...)
+	b = append(b, instanceID...)
+	b = append(b, `","status":"Active","pduSessionId":`...)
+	b = strconv.AppendInt(b, int64(req.PduSessionId), 10)
+	b = append(b, `,"supi":"`...)
+	b = append(b, req.Supi...)
+	b = append(b, `"}`...)
+	w.Write(b)
 }
 
 func HealthCheck(

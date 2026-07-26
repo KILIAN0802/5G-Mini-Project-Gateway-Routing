@@ -1,10 +1,13 @@
 services:
-  # Container của gateway - sử dụng đa nhân CPU để tối đa hóa TPS
+  # Container của gateway - gán cứng vào CPU Core 0
   gateway:
     build:
       context: ./gateway
     ports:
       - "8080:8080"
+    cpuset: "0"
+    environment:
+      - GOGC=500
     depends_on:
       - pdu-session-1
       - pdu-session-2

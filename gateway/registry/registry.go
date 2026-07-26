@@ -4,6 +4,7 @@ import (
 	"gateway/models"
 	"log"
 	"net"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,10 +70,14 @@ func ServiceDiscovery() {
 			}
 
 			if !found {
+				targetURLStr := "http://" + addr + "/create-session"
+				parsedURL, _ := url.Parse(targetURLStr)
 				inst := &models.Instance{
-					ID:      "Instance:" + addr,
-					Address: addr,
-					Weight:  1,
+					ID:           "Instance:" + addr,
+					Address:      addr,
+					TargetURL:    parsedURL,
+					TargetURLStr: targetURLStr,
+					Weight:       1,
 				}
 				inst.Healthy.Store(true)
 				Instance = append(Instance, inst)
