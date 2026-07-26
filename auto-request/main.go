@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -85,29 +84,22 @@ func runBenchmark(clients []*http.Client, TotalRequests int, concurrency int) {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			client := clients[workerID % len(clients)]
-			for reqID := range jobs {
-				requestData := map[string]interface{}{
-					"supi":         fmt.Sprintf("%s%010d", config.SupiBase, reqID),
-					"gspi":         "0919213638",
-					"pduSessionId": reqID,
-					"dnn":          "internet",
-					"sNssai": map[string]interface{}{
-						"sst": 1,
-						"sd":  "000001",
-					},
-					"servingNfid": "amf-1",
-					"anType":      "3GPP",
+			client := clients[workerID%len(clients)]
+			localHandledMap := make(map[string]int)
+			defer func() {
+				mapMutex.Lock()
+				for inst, count := range localHandledMap {
+					handledMap[inst] += count
 				}
+				mapMutex.Unlock()
+			}()
 
-				jsonData, err := json.Marshal(requestData)
-				if err != nil {
-					atomic.AddInt64(&failCount, 1)
-					continue
-				}
+			for reqID := range jobs {
+				expectedSupi := fmt.Sprintf("%s%010d", config.SupiBase, reqID)
+				jsonStr := fmt.Sprintf(`{"supi":"%s","gspi":"0919213638","pduSessionId":%d,"dnn":"internet","sNssai":{"sst":1,"sd":"000001"},"servingNfid":"amf-1","anType":"3GPP"}`, expectedSupi, reqID)
 
 				reqStartTime := time.Now()
-				resp, err := client.Post(config.targetURL, "application/json", bytes.NewBuffer(jsonData))
+				resp, err := client.Post(config.targetURL, "application/json", strings.NewReader(jsonStr))
 
 				if err != nil {
 					atomic.AddInt64(&failCount, 1)
@@ -134,9 +126,8 @@ func runBenchmark(clients []*http.Client, TotalRequests int, concurrency int) {
 					continue
 				}
 
-				expectedSupi := fmt.Sprintf("%s%010d", config.SupiBase, reqID)
 				if result.PduSessionId != reqID || result.Supi != expectedSupi {
-					log.Printf("[LỖI] Sai luồng! Gửi ID: %d (Nhận ID: %d) | Gửi SUPI: %s (Nhận SUPI: %s)", 
+					log.Printf("[LỖI] Sai luồng! Gửi ID: %d (Nhận ID: %d) | Gửi SUPI: %s (Nhận SUPI: %s)",
 						reqID, result.PduSessionId, expectedSupi, result.Supi)
 					atomic.AddInt64(&failCount, 1)
 					continue
@@ -144,9 +135,7 @@ func runBenchmark(clients []*http.Client, TotalRequests int, concurrency int) {
 
 				atomic.AddInt64(&successCount, 1)
 				atomic.AddInt64(&totalLatency, latency)
-				mapMutex.Lock()
-				handledMap[result.Handleby]++
-				mapMutex.Unlock()
+				localHandledMap[result.Handleby]++
 			}
 		}(w)
 	}

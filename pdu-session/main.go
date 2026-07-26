@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -67,14 +66,8 @@ func CreateSession(
 
 	// log.Printf("[%s] Bat dau xu ly session, sleep %v", instanceID, delayDuration)
 	// time.Sleep(delayDuration)
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "bad request", 400)
-		return
-	}
-
 	var req CreateSessionRequest
-	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", 400)
 		return
 	}
@@ -86,14 +79,8 @@ func CreateSession(
 		Supi:         req.Supi,
 	}
 
-	respBytes, err := json.Marshal(resp)
-	if err != nil {
-		http.Error(w, "internal server error", 500)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(respBytes)
+	json.NewEncoder(w).Encode(resp)
 }
 
 func HealthCheck(
@@ -201,7 +188,13 @@ func main() {
 		Metrics,
 	)
 
-	h2s := &http2.Server{}
+	h2s := &http2.Server{
+		MaxConcurrentStreams:         50000,
+		MaxReadFrameSize:             1048576,
+		IdleTimeout:                  120 * time.Second,
+		MaxUploadBufferPerStream:     65535 * 32,
+		MaxUploadBufferPerConnection: 65535 * 64,
+	}
 	h2cHandler := h2c.NewHandler(http.DefaultServeMux, h2s)
 
 	server := &http.Server{

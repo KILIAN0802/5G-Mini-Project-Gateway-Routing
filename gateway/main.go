@@ -10,7 +10,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	// "sync/atomic"
+	"sync/atomic"
 
 	// Cho phép:
 	// Tạo web server ( http.ListenAndServe)
@@ -29,33 +29,52 @@ import (
 
 var bufferPool = sync.Pool{
 	New: func() interface{} {
-		b := make([]byte, 4096)
+		b := make([]byte, 32768)
 		return &b
 	},
 }
 
-var pduClient = &http.Client{
-	Timeout: 90 * time.Second,
-	Transport: &http2.Transport{
-		AllowHTTP: true,
-		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
-			dialer := &net.Dialer{
-				Timeout:   5 * time.Second,
-				KeepAlive: 60 * time.Second,
-			}
-			conn, err := dialer.DialContext(ctx, network, addr)
-			if err != nil {
-				return nil, err
-			}
-			if tcpConn, ok := conn.(*net.TCPConn); ok {
-				_ = tcpConn.SetNoDelay(true)
-			}
-			return conn, nil
-		},
-		StrictMaxConcurrentStreams: false,
-		ReadIdleTimeout:            30 * time.Second,
-		PingTimeout:                15 * time.Second,
-	},
+const clientPoolSize = 16
+
+var (
+	pduClientPool []*http.Client
+	pduClientIdx  uint64
+)
+
+func initPDUClientPool() {
+	pduClientPool = make([]*http.Client, clientPoolSize)
+	for i := 0; i < clientPoolSize; i++ {
+		pduClientPool[i] = &http.Client{
+			Timeout: 90 * time.Second,
+			Transport: &http2.Transport{
+				AllowHTTP: true,
+				DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+					dialer := &net.Dialer{
+						Timeout:   5 * time.Second,
+						KeepAlive: 60 * time.Second,
+					}
+					conn, err := dialer.DialContext(ctx, network, addr)
+					if err != nil {
+						return nil, err
+					}
+					if tcpConn, ok := conn.(*net.TCPConn); ok {
+						_ = tcpConn.SetNoDelay(true)
+						_ = tcpConn.SetReadBuffer(1024 * 1024)
+						_ = tcpConn.SetWriteBuffer(1024 * 1024)
+					}
+					return conn, nil
+				},
+				StrictMaxConcurrentStreams: false,
+				ReadIdleTimeout:            30 * time.Second,
+				PingTimeout:                15 * time.Second,
+			},
+		}
+	}
+}
+
+func getPDUClient() *http.Client {
+	idx := atomic.AddUint64(&pduClientIdx, 1)
+	return pduClientPool[idx%clientPoolSize]
 }
 
 func ForwardToPDU(
@@ -75,7 +94,7 @@ func ForwardToPDU(
 	}
 	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
 
-	resp, err := pduClient.Do(req)
+	resp, err := getPDUClient().Do(req)
 	if err != nil {
 		log.Printf("ForwardToPDU error forwarding to %s: %v", selected.Address, err)
 		http.Error(w, "Backend Error: "+err.Error(), 500)
@@ -85,7 +104,10 @@ func ForwardToPDU(
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+
+	bufPtr := bufferPool.Get().(*[]byte)
+	defer bufferPool.Put(bufPtr)
+	io.CopyBuffer(w, resp.Body, *bufPtr)
 }
 
 func ListSessionsForward(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +123,7 @@ func ListSessionsForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := pduClient.Do(req)
+	resp, err := getPDUClient().Do(req)
 	if err != nil {
 		log.Printf("ListSessionsForward error forwarding to %s: %v", selected.Address, err)
 		http.Error(w, "Backend Error: "+err.Error(), 500)
@@ -110,7 +132,9 @@ func ListSessionsForward(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	w.Header().Set("Content-Type", "application/json")
-	io.Copy(w, resp.Body)
+	bufPtr := bufferPool.Get().(*[]byte)
+	defer bufferPool.Put(bufPtr)
+	io.CopyBuffer(w, resp.Body, *bufPtr)
 }
 
 // RateLimiter triển khai thuật toán Token Bucket (Xô chứa Token) để kiểm soát tốc độ request (RPS)
@@ -272,6 +296,8 @@ func (rq *RequestQueue) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // }
 
 func main() {
+	initPDUClientPool()
+	registry.UpdateHealthyCache()
 	algorithm.SetStrategy(&algorithm.RoundRobin{})
 	// algorithm.SetStrategy(&algorithm.WeightedRR{})
 	// algorithm.SetStrategy(&algorithm.LoadBalancer{})
@@ -327,9 +353,11 @@ func main() {
 	// limiter := NewRateLimiter(200000, 1000000)
 	// reqQueue := NewRequestQueue(100000, 500000, limiter)
 	h2s := &http2.Server{
-		MaxConcurrentStreams: 10000,
-		MaxReadFrameSize:     1048576,
-		IdleTimeout:          120 * time.Second,
+		MaxConcurrentStreams:         50000,
+		MaxReadFrameSize:             1048576,
+		IdleTimeout:                  120 * time.Second,
+		MaxUploadBufferPerStream:     65535 * 32,
+		MaxUploadBufferPerConnection: 65535 * 64,
 	}
 	server := &http.Server{
 		Addr:         ":8080",

@@ -1,13 +1,10 @@
-version: "3.8"
-
 services:
-  # Container của gateway - gán cứng vào CPU Core 0
+  # Container của gateway - sử dụng đa nhân CPU để tối đa hóa TPS
   gateway:
     build:
       context: ./gateway
     ports:
       - "8080:8080"
-    cpuset: "0"
     depends_on:
       - pdu-session-1
       - pdu-session-2
@@ -28,11 +25,10 @@ services:
     depends_on:
       - redis
 
-  # Instance PDU Session 1 - gán cứng vào CPU Core 1
+  # Instance PDU Session 1
   pdu-session-1:
     build:
       context: ./pdu-session
-    cpuset: "1"
     environment:
       - INSTANCE_ID=pdu-session-1
       - PORT=9001
@@ -44,11 +40,10 @@ services:
     depends_on:
       - redis
 
-  # Instance PDU Session 2 - gán cứng vào CPU Core 2
+  # Instance PDU Session 2
   pdu-session-2:
     build:
       context: ./pdu-session
-    cpuset: "2"
     environment:
       - INSTANCE_ID=pdu-session-2
       - PORT=9001
@@ -60,11 +55,10 @@ services:
     depends_on:
       - redis
 
-  # Instance PDU Session 3 - gán cứng vào CPU Core 3
+  # Instance PDU Session 3
   pdu-session-3:
     build:
       context: ./pdu-session
-    cpuset: "3"
     environment:
       - INSTANCE_ID=pdu-session-3
       - PORT=9001
@@ -76,11 +70,10 @@ services:
     depends_on:
       - redis
 
-  # Instance PDU Session 4 - gán cứng vào CPU Core 4
+  # Instance PDU Session 4
   pdu-session-4:
     build:
       context: ./pdu-session
-    cpuset: "4"
     environment:
       - INSTANCE_ID=pdu-session-4
       - PORT=9001

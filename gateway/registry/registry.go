@@ -9,31 +9,37 @@ import (
 	"time"
 )
 
-func GetHealthyInstance() []*models.Instance {
+var (
+	Instance     []*models.Instance
+	RegistryMu   sync.RWMutex
+	healthyCache atomic.Value
+)
 
+func UpdateHealthyCache() {
 	RegistryMu.RLock()
-	defer RegistryMu.RUnlock()
-
-	var healthy []*models.Instance // slice sẽ chứa những pdu instance đang hoạt động
+	var healthy []*models.Instance
 	for i := range Instance {
 		if Instance[i].Healthy.Load() {
-			healthy =
-				append(
-					healthy,
-					Instance[i],
-				)// thêm Instance[i] vào health
+			healthy = append(healthy, Instance[i])
 		}
 	}
+	RegistryMu.RUnlock()
 
-	return healthy
+	if healthy == nil {
+		healthy = []*models.Instance{}
+	}
+	healthyCache.Store(healthy)
+}
+
+func GetHealthyInstance() []*models.Instance {
+	val := healthyCache.Load()
+	if val == nil {
+		return nil
+	}
+	return val.([]*models.Instance)
 }
 
 const DefaultInterval = 10 * time.Second
-
-var (
-	Instance []*models.Instance
-	RegistryMu sync.RWMutex
-)
 
 func ServiceDiscovery() {
 	for {
@@ -63,27 +69,29 @@ func ServiceDiscovery() {
 			}
 
 			if !found {
-				Instance = append(Instance, &models.Instance{
-					ID: "Instance:"+ addr,
+				inst := &models.Instance{
+					ID:      "Instance:" + addr,
 					Address: addr,
-					Healthy: atomic.Bool{},
-					Weight: 1,
-				})
+					Weight:  1,
+				}
+				inst.Healthy.Store(true)
+				Instance = append(Instance, inst)
 				log.Println("New instance added: ", addr)
 			}	
-			}
+		}
 
-			var updated []*models.Instance
-			for _, inst := range Instance{
-				if newInstances[inst.Address] {
+		var updated []*models.Instance
+		for _, inst := range Instance{
+			if newInstances[inst.Address] {
 				updated = append(updated, inst)
-			}else{
+			} else {
 				log.Println("Instance removed: ", inst.Address)
 			}
 		}
 
 		Instance = updated
 		RegistryMu.Unlock()
+		UpdateHealthyCache()
 		time.Sleep(DefaultInterval)
 	}
 }

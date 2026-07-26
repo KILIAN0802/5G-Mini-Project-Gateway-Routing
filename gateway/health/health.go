@@ -58,4 +58,5 @@ func CheckAllInstances() {
 		}(inst)
 	}
 	wg.Wait()
+	registry.UpdateHealthyCache()
 }
