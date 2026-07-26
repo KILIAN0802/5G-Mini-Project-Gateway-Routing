@@ -44,33 +44,23 @@ type MetricsResponse struct {
 }
 
 // Hàm xử lý
-var mu sync.Mutex
+var sessions sync.Map
 
 func CreateSession(
-	w http.ResponseWriter, //
+	w http.ResponseWriter,
 	r *http.Request,
 ) {
 	IncrementActiveRequest()
 	defer DecrementActiveRequest()
 
-	// delayMode := GetEnv("DELAY_MODE", "fixed")
-	// var delayDuration time.Duration
-
-	// if delayMode == "random" {
-	// 	// Sinh ngẫu nhiên thời gian xử lý: random % 20 giây (0 -> 19s)
-	// 	delaySeconds := rand.Intn(20)
-	// 	delayDuration = time.Duration(delaySeconds) * time.Second
-	// } else {
-	// 	// Mặc định cố định 15 giây
-	// 	delayDuration = 15 * time.Second
-	// }
-
-	// log.Printf("[%s] Bat dau xu ly session, sleep %v", instanceID, delayDuration)
-	// time.Sleep(delayDuration)
 	var req CreateSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", 400)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
+	}
+
+	if req.Supi != "" {
+		sessions.Store(req.Supi, req)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -90,9 +80,7 @@ func HealthCheck(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	w.Write(
-		[]byte("OK"), // Chuyển chuỗi "OK" thành mảng byte vì hàm Write yêu cầu mảng byte
-	)
+	w.Write([]byte("OK"))
 }
 
 func Metrics(
@@ -104,10 +92,7 @@ func Metrics(
 		ActiveRequests: int(atomic.LoadInt64(&activeRequests)),
 	}
 
-	w.Header().Set(
-		"Content-Type",
-		"application/json",
-	)
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -133,7 +118,6 @@ func getLocalIP() string {
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	instanceID = GetEnv("INSTANCE_ID", "")
-	initRedis()
 	if instanceID == "" {
 		host, err := os.Hostname()
 		if err != nil {
@@ -143,43 +127,22 @@ func main() {
 		instanceID = host + " (" + ip + ")"
 	}
 
-	port := GetEnv(
-		"PORT",
-		"9001",
-	)
+	port := GetEnv("PORT", "9001")
 
-	http.HandleFunc(
-		"/create-session",
-		CreateSession,
-	)
-	http.HandleFunc(
-		"/health",
-		HealthCheck,
-	)
+	http.HandleFunc("/create-session", CreateSession)
+	http.HandleFunc("/health", HealthCheck)
 
 	http.HandleFunc(
 		"/list-sessions",
 		func(w http.ResponseWriter, r *http.Request) {
-			// log.Printf("[%s] API list-sessions duoc goi", instanceID)
-			data, err := GetAllSessionsFromRedis()
-			if err != nil {
-				log.Printf("[%s] Loi doc tu Redis: %v", instanceID, err)
-				http.Error(w, "Redis read error: "+err.Error(), 500)
-				return
-			}
 			parsedSessions := make(map[string]interface{})
-			for supi, rawJSON := range data {
-				var val interface{}
-				if err := json.Unmarshal([]byte(rawJSON), &val); err == nil {
-					parsedSessions[supi] = val
-				} else {
-					parsedSessions[supi] = rawJSON
+			sessions.Range(func(key, value any) bool {
+				if k, ok := key.(string); ok {
+					parsedSessions[k] = value
 				}
-			}
-			w.Header().Set(
-				"Content-Type",
-				"application/json",
-			)
+				return true
+			})
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(parsedSessions)
 		},
 	)

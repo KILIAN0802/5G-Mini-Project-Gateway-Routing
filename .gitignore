@@ -1,2 +1,18 @@
+# Binaries and Executables
 *.exe
+*.exe;
+*.dll
+*.so
+*.dylib
 *.out
+gateway/gateway
+pdu-session/pdu-session
+auto-request/auto-request
+*.test
+
+# OS / IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
